@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -917,6 +916,12 @@ export default function LocationSpy() {
     return hash || str.length;
   };
 
+  const seededRandomInt = (min, max, seedSource) => {
+    const seedValue = computeSeed(seedSource);
+    const normalized = Math.abs(Math.sin(seedValue) * 10000) % 1;
+    return Math.floor(normalized * (max - min + 1)) + min;
+  };
+
   const pickBySeed = (list, seedSource) => {
     if (!list || list.length === 0) return null;
     const seedValue = computeSeed(seedSource);
@@ -1771,9 +1776,10 @@ export default function LocationSpy() {
       const seenCities = new Set(cityInsights.map((city) => city.name.toLowerCase()));
       for (const city of nearbyCities) {
         if (seenCities.has(city.name.toLowerCase())) continue;
+        const randomCount = seededRandomInt(1, 10, city.name);
         cityInsights.push({
           name: city.name,
-          summary: `Monitoramento preventivo na área`,
+          summary: `${randomCount} ${randomCount === 1 ? 'local suspeito monitorado' : 'locais suspeitos monitorados'}`,
         });
         seenCities.add(city.name.toLowerCase());
         if (cityInsights.length >= 5) break;
@@ -2007,13 +2013,12 @@ export default function LocationSpy() {
               </div>
 
               <div className="space-y-3">
-                {displayedHotspots.map((loc, index) => {
+                {[...displayedHotspots, ...displayedMotels].map((loc, index) => {
                   const { meta, narrative, timeframe } = buildNarrativeForLocation(loc);
                   const badgeLabel = typeof meta.badge === 'function' ? meta.badge(loc) : meta.badge;
                   const cityLabel = loc.cidade || loc.city || detectedLocation.cidade;
-      const distanceLabel = detectedLocation ? formatDistance(calculateDistanceKm(detectedLocation.lat, detectedLocation.lon, loc.lat, loc.lon)) : null;
                   return (
-                    <div key={`hotspot-${index}`} className="rounded-xl border border-gray-200 p-3 shadow-sm hover:border-orange-200 transition">
+                    <div key={`location-${index}`} className="rounded-xl border border-gray-200 p-3 shadow-sm hover:border-orange-200 transition">
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
@@ -2023,11 +2028,14 @@ export default function LocationSpy() {
                           {loc.endereco && (
                             <p className="text-[13px] text-gray-500">{loc.endereco}</p>
                           )}
-                          <p className="text-[13px] text-gray-500 mt-1">
-                            {cityLabel && <span className="font-semibold text-gray-700">{cityLabel}</span>}
-                            {distanceLabel && <span> </span>}
-                          </p>
-                          <p className="text-[13px] text-gray-500 mt-2">{meta.risk}</p>
+                          {cityLabel && (
+                            <p className="text-[13px] text-gray-500 mt-1">
+                              <span className="font-semibold text-gray-700">{cityLabel}</span>
+                            </p>
+                          )}
+                          {loc.categoria === 'motel' && loc.description && (
+                            <p className="text-[13px] text-gray-500 mt-2">{loc.description}</p>
+                          )}
                         </div>
                         <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[13px] font-semibold ${meta.tone}`}>
                           {meta.icon} {badgeLabel}
@@ -2036,7 +2044,7 @@ export default function LocationSpy() {
                       <p className="text-[13px] text-gray-600 mt-2">{narrative}</p>
                       <p className="text-[12px] text-gray-400 mt-1">{timeframe}</p>
                       <a
-                        href={getDirectionsUrl(loc)}
+                        href={getDirectionsUrl(loc.categoria === 'motel' ? { ...loc, nome: loc.nome || loc.name } : loc)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 mt-3 text-xs font-medium text-gray-400 hover:text-gray-500"
@@ -2048,49 +2056,6 @@ export default function LocationSpy() {
                   );
                 })}
               </div>
-
-              {displayedMotels.length > 0 && (
-                <div className="mt-5 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-[17px] font-bold text-gray-900">🚨 Localizações ainda mais suspeitas</p>
-                    <span className="text-[13px] text-gray-500"></span>
-                  </div>
-                  {displayedMotels.map((motel, index) => {
-                    const { meta, narrative, timeframe } = buildNarrativeForLocation(motel);
-                    const badgeLabel = typeof meta.badge === 'function' ? meta.badge(motel) : meta.badge;
-                    const cityDisplay = motel.city || detectedLocation.cidade;
-                    return (
-                      <div key={`motel-${index}`} className="rounded-xl border border-rose-200 overflow-hidden shadow-sm">
-                        <div className="h-32 w-full overflow-hidden">
-                          <img src={motel.imageUrl} alt={motel.name} className="w-full h-full object-cover" loading="lazy" />
-                        </div>
-                        <div className="p-3 space-y-2 bg-rose-50/80">
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <p className="text-[15px] font-bold text-gray-900">{motel.name}</p>
-                              <p className="text-[13px] text-gray-600">{cityDisplay} • {motel.distance}</p>
-                            </div>
-                            <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[13px] font-semibold ${meta.tone}`}>
-                              {meta.icon} {badgeLabel}
-                            </div>
-                          </div>
-                          <p className="text-[13px] text-gray-600">{narrative}</p>
-                          <p className="text-[12px] text-gray-400">{timeframe}</p>
-                          <a
-                            href={getDirectionsUrl({ ...motel, nome: motel.name })}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-gray-500"
-                          >
-                            <span className="text-sm">↗</span>
-                            Ver localização
-                          </a>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
 
               {!showMoreLocations && totalHiddenSpots > 0 && (
                 <Button onClick={handleBuyMoreLocations} variant="outline" className="w-full h-auto border-2 border-orange-300 hover:bg-orange-50 font-semibold text-sm rounded-xl p-4 mt-4">
