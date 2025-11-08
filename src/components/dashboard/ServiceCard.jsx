@@ -5,6 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Instagram, Facebook, MessageCircle, Camera, MapPin, Share2, Mail, Phone, Wifi, Zap, Clock, Loader2, UserSearch } from "lucide-react";
 import WhatsAppIcon from "../icons/WhatsAppIcon";
 
+const INVESTIGATION_BADGE_CONFIG = {
+  minWidth: 86, // ⬅️ Edite a largura mínima (px)
+  height: 32, // ⬅️ Edite a altura total (px)
+  fontSize: 14, // ⬅️ Edite o tamanho do texto (px)
+};
+
 const iconMap = {
   Instagram: Instagram,
   Facebook: Facebook,
@@ -52,6 +58,11 @@ export default function ServiceCard({ service, onClick, isInvestigating, progres
     return '#FF6B4A';
   };
 
+  const iconColor = getIconColor();
+  const baseColor = typeof iconColor === 'string' && iconColor.startsWith('#') ? iconColor : '#FF6B4A';
+  const badgeBackgroundColor = hexToRgba(baseColor, 0.1);
+  const badgeBorderColor = hexToRgba(baseColor, 0.3);
+
   const getBackgroundColor = () => {
     // Usar cor do serviço com opacidade se disponível
     if (service.color) {
@@ -81,18 +92,23 @@ export default function ServiceCard({ service, onClick, isInvestigating, progres
         style={{ backgroundColor: getBackgroundColor() }}
       >
         {iconName === "whatsapp" ? (
-          <WhatsAppIcon className="w-6 h-6" color={getIconColor()} />
+          <WhatsAppIcon className="w-6 h-6" color={iconColor} />
         ) : (
           React.createElement(iconName, {
             className: "w-6 h-6",
-            style: { color: getIconColor() }
+            style: { color: iconColor }
           })
         )}
         {isInvestigating && (
           <Loader2
             className="w-3 h-3 animate-spin absolute top-0.5 right-0.5"
-            style={{ color: getIconColor() }}
+            style={{ color: iconColor }}
           />
+        )}
+        {isCompleted && (
+          <div className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-green-500 flex items-center justify-center shadow-sm">
+            <span className="text-[10px] font-bold text-white leading-none">✓</span>
+          </div>
         )}
       </div>
 
@@ -104,43 +120,86 @@ export default function ServiceCard({ service, onClick, isInvestigating, progres
       </div>
 
       {isInvestigating ? (
-        <div className="mt-2 inline-block">
-          <div
-            className="flex items-center gap-1 px-2 py-1 rounded-lg border"
-            style={{
-              backgroundColor: '#FF6B4A10',
-              borderColor: '#FF6B4A30'
-            }}
+  <div className="flex items-center justify-between mt-2">
+    <div
+      className="flex items-center gap-1 px-2 py-1 rounded-lg border"
+      style={{
+        backgroundColor: badgeBackgroundColor,
+        borderColor: badgeBorderColor
+      }}
+    >
+      <Clock className="w-3 h-3" style={{ color: iconColor }} />
+      <p
+        className="text-sm font-bold"
+        style={{ color: iconColor }}
+      >
+        {progress}%
+      </p>
+      <p className="text-[10px] font-medium" style={{ color: '#666' }}>
+
+      </p>
+    </div>
+  </div>
+) : isCompleted ? (
+  <div className="flex items-center justify-between mt-2">
+    <div
+      className="flex items-center justify-center gap-1 rounded-lg border-0"
+      style={{
+        backgroundColor: '#DCFCE7',
+        height: '28px',
+        minWidth: '80px',
+        paddingLeft: '8px',
+        paddingRight: '8px',
+        paddingTop: '4px',
+        paddingBottom: '4px',
+      }}
+    >
+      <span
+        className="font-bold leading-none whitespace-nowrap"
+        style={{
+          color: '#16803D',
+          fontSize: '12px',
+        }}
+      >
+        Completa
+      </span>
+    </div>
+    <div className="w-5" aria-hidden="true" />
+  </div>
+) : (
+  <div className="flex items-center justify-between mt-2">
+    {isFree ? (
+      <div className="inline-block min-h-[32px]">
+        <div
+          className="flex items-center gap-1 rounded-lg border-0 justify-center bg-blue-500"
+          style={{
+            minWidth: `${INVESTIGATION_BADGE_CONFIG.minWidth}px`,
+            height: '28px',
+            padding: '0 12px',
+          }}
+        >
+          <span
+            className="text-xs font-bold text-white leading-none whitespace-nowrap"
           >
-            <Clock className="w-3 h-3 text-orange-500" />
-            <span className="text-sm font-bold text-orange-600">{progress}%</span>
-          </div>
+            GRÁTIS
+          </span>
         </div>
-      ) : isCompleted ? (
-        <Badge className="bg-green-100 text-green-700 border-0 text-xs font-semibold px-2 py-1">
-          ✓ Completa
-        </Badge>
-      ) : (
-        <div className="flex items-center justify-between mt-2">
-          {isFree ? (
-            <Badge className="bg-blue-500 text-white border-0 text-xs font-bold px-2">
-              GRÁTIS
-            </Badge>
-          ) : (
-            <div
+      </div>
+    ) : (
+      <div
               className="flex items-center gap-1 px-2 py-1 rounded-lg border"
               style={{
-                backgroundColor: service.color ? hexToRgba(service.color, 0.1) : '#FF6B4A10',
-                borderColor: service.color ? hexToRgba(service.color, 0.3) : '#FF6B4A30'
+                backgroundColor: badgeBackgroundColor,
+                borderColor: badgeBorderColor
               }}
             >
               <Zap
                 className="w-3 h-3"
-                style={{ color: getIconColor() }}
+                style={{ color: iconColor }}
               />
               <p
                 className="text-sm font-bold"
-                style={{ color: getIconColor() }}
+                style={{ color: iconColor }}
               >
                 {service.credits_cost}
               </p>

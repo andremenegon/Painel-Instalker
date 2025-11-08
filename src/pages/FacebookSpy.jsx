@@ -18,6 +18,8 @@ import {
   AlertCircle
 } from "lucide-react";
 import ConfirmModal from "@/components/dashboard/ConfirmModal";
+import { useInvestigationTimer } from "@/hooks/useInvestigationTimer";
+import { ensureTimer, getDurationForInvestigation, resetTimer, markCompleted } from "@/lib/progressManager";
 
 export default function FacebookSpy() {
   const navigate = useNavigate();
@@ -29,7 +31,6 @@ export default function FacebookSpy() {
   const [creditsSpent, setCreditsSpent] = useState(0);
   const [xpGained, setXpGained] = useState(0);
   const [accelerating, setAccelerating] = useState(false);
-  const [showAccelerateButton, setShowAccelerateButton] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [confirmModalConfig, setConfirmModalConfig] = useState({});
   const [showAlertModal, setShowAlertModal] = useState(false);
@@ -37,6 +38,7 @@ export default function FacebookSpy() {
   const [urlError, setUrlError] = useState("");
   const queryClient = useQueryClient();
   // Removed hasShownAccelerate useRef as it's replaced by localStorage
+  const completionHandledRef = useRef(false);
 
   // ✅ FUNÇÃO DE SOM UNIVERSAL
   const playSound = (type) => {
@@ -118,60 +120,49 @@ export default function FacebookSpy() {
     inv => inv.service_name === "Facebook" && inv.status === "processing"
   );
 
-  // Auto-update progress: igual ao Instagram
-  useEffect(() => {
-    if (!activeFacebookInvestigation || activeFacebookInvestigation.progress >= 100) return;
-    
-    let interval;
-    if (activeFacebookInvestigation.progress < 5) {
-      interval = 10000; // 10 segundos até 5%
-    } else if (activeFacebookInvestigation.progress < 10) {
-      interval = 60000; // 1 minuto de 5% a 10%
-    } else {
-      interval = 3600000; // 1 hora depois de 10%
-    }
-    
-    const timer = setInterval(async () => {
-      const newProgress = Math.min(100, activeFacebookInvestigation.progress + 1);
-      
-      await base44.entities.Investigation.update(activeFacebookInvestigation.id, {
-        progress: newProgress,
-        status: newProgress >= 100 ? "completed" : "processing"
-      });
-      
-      await refetch();
-    }, interval);
-    
-    return () => clearInterval(timer);
-  }, [activeFacebookInvestigation?.progress, activeFacebookInvestigation?.id, refetch]);
+  const completedFacebookInvestigation = investigations.find(
+    inv => inv.service_name === "Facebook" && (inv.status === "completed" || inv.status === "accelerated")
+  );
 
-  // Mostrar botão de acelerar: delay de 5s APENAS na primeira vez (persiste no localStorage)
+  const {
+    progress: timerProgress,
+    canAccelerate,
+    accelerate: accelerateTimer,
+  } = useInvestigationTimer({ service: "Facebook", investigation: activeFacebookInvestigation });
+
   useEffect(() => {
     if (!activeFacebookInvestigation) {
-      setShowAccelerateButton(false); // Hide button if no active investigation
+      completionHandledRef.current = false;
       return;
     }
-    // Only show accelerate button if progress is between 1 and 99 (inclusive).
-    if (activeFacebookInvestigation.progress < 1 || activeFacebookInvestigation.progress >= 100) {
-      setShowAccelerateButton(false); // Ensure button is hidden if investigation is not "processing" or finished
-      return;
+
+    if (timerProgress >= 100 && !completionHandledRef.current) {
+      completionHandledRef.current = true;
+
+      (async () => {
+        try {
+          await base44.entities.Investigation.update(activeFacebookInvestigation.id, {
+            progress: 100,
+            status: "completed",
+          });
+
+          markCompleted({ service: "Facebook", id: activeFacebookInvestigation.id });
+          playSound('complete');
+          queryClient.invalidateQueries({ queryKey: ['investigations', user?.email] });
+          await refetch();
+        } catch (error) {
+          console.error("Erro ao finalizar investigação do Facebook:", error);
+          completionHandledRef.current = false;
+        }
+      })();
     }
-    
-    const storageKey = `accelerate_shown_${activeFacebookInvestigation.id}`;
-    const alreadyShown = localStorage.getItem(storageKey) === 'true';
-    
-    if (alreadyShown) {
-      setShowAccelerateButton(true);
-    } else {
-      setShowAccelerateButton(false);
-      const timer = setTimeout(() => {
-        setShowAccelerateButton(true);
-        localStorage.setItem(storageKey, 'true');
-      }, 5000);
-      
-      return () => clearTimeout(timer);
+  }, [timerProgress, activeFacebookInvestigation?.id, queryClient, refetch, user?.email]);
+
+  useEffect(() => {
+    if (completedFacebookInvestigation) {
+      navigate(createPageUrl("FacebookSpyResults"));
     }
-  }, [activeFacebookInvestigation?.id]);
+  }, [completedFacebookInvestigation?.id, navigate]);
 
   const validateFacebookUrl = (url) => {
     const facebookPatterns = [
@@ -197,11 +188,12 @@ export default function FacebookSpy() {
   };
 
   const handleUrlChange = (e) => {
-    const value = e.target.value;
-    setSearchQuery(value);
-    
-    if (value.trim().length > 0) {
-      validateFacebookUrl(value);
+    const rawValue = e.target.value;
+    const sanitizedValue = rawValue.replace(/\s+/g, "");
+    setSearchQuery(sanitizedValue);
+
+    if (sanitizedValue.length > 0) {
+      validateFacebookUrl(sanitizedValue);
     } else {
       setUrlError("");
     }
@@ -292,13 +284,21 @@ export default function FacebookSpy() {
       xp: userProfile.xp + 20
     });
 
-    await base44.entities.Investigation.create({
+    const newInvestigation = await base44.entities.Investigation.create({
       target_username: username,
       service_name: "Facebook",
       status: "processing",
       progress: 1,
       estimated_days: 7,
-      is_accelerated: false
+      is_accelerated: false,
+      created_by: user?.email || ''
+    });
+
+    ensureTimer({
+      service: "Facebook",
+      id: newInvestigation.id,
+      durationMs: getDurationForInvestigation(newInvestigation),
+      startAt: Date.now(),
     });
 
     setCreditsSpent(45);
@@ -306,7 +306,7 @@ export default function FacebookSpy() {
     setShowCreditAlert(true);
     setTimeout(() => setShowCreditAlert(false), 3000);
     
-    queryClient.invalidateQueries({ queryKey: ['investigations'] });
+    queryClient.invalidateQueries({ queryKey: ['investigations', user?.email] });
     queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] }); // Invalidate userProfile for credit update
     setLoading(false);
   };
@@ -334,6 +334,8 @@ export default function FacebookSpy() {
     setShowConfirmModal(true);
   };
 
+  const showAccelerateButton = canAccelerate && !accelerating && timerProgress > 0 && timerProgress < 100;
+
   const handleAccelerate = async () => {
     if (!userProfile || userProfile.credits < 30) {
       playSound('error');
@@ -352,23 +354,48 @@ export default function FacebookSpy() {
 
     playSound('turbo');
     setAccelerating(true);
-    setShowAccelerateButton(false);
 
     await base44.entities.UserProfile.update(userProfile.id, {
       credits: userProfile.credits - 30,
       xp: userProfile.xp + 25
     });
 
-    const boost = 17;
-    const newProgress = Math.min(100, activeFacebookInvestigation.progress + boost);
+    queryClient.setQueryData(['userProfile', user?.email], (oldData) => {
+      if (!oldData) return oldData;
+      return oldData.map((profile) =>
+        profile.id === userProfile.id
+          ? { ...profile, credits: userProfile.credits - 30, xp: userProfile.xp + 25 }
+          : profile
+      );
+    });
+    queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
+      if (!oldProfile) return oldProfile;
+      return { ...oldProfile, credits: userProfile.credits - 30, xp: userProfile.xp + 25 };
+    });
+    queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
+    queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
+
+    const newProgress = accelerateTimer();
+    const newStatus = newProgress >= 100 ? "completed" : "processing";
 
     await base44.entities.Investigation.update(activeFacebookInvestigation.id, {
       progress: newProgress,
-      status: newProgress >= 100 ? "completed" : "processing"
+      status: newStatus
     });
 
-    queryClient.invalidateQueries({ queryKey: ['investigations'] });
-    queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
+    queryClient.setQueryData(['investigations', user?.email], (oldData) => {
+      if (!oldData) return oldData;
+      return oldData.map(inv => 
+        inv.id === activeFacebookInvestigation.id ? { ...inv, progress: newProgress, status: newStatus } : inv
+      );
+    });
+
+    if (newProgress >= 100) {
+      markCompleted({ service: "Facebook", id: activeFacebookInvestigation.id });
+    }
+
+    queryClient.invalidateQueries({ queryKey: ['investigations', user?.email] });
+    queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
 
     setCreditsSpent(30);
     setXpGained(25);
@@ -376,8 +403,6 @@ export default function FacebookSpy() {
     setTimeout(() => setShowCreditAlert(false), 3000);
 
     setAccelerating(false);
-    
-    setTimeout(() => setShowAccelerateButton(true), 5000); 
   };
 
 
@@ -422,19 +447,19 @@ export default function FacebookSpy() {
                   <p className="text-xs text-gray-500">Analisando Facebook...</p>
                 </div>
                 <Badge className="bg-[#E7F3FF] text-[#1877F2] border-0 flex-shrink-0">
-                  {activeFacebookInvestigation.progress}%
+                  {timerProgress}%
                 </Badge>
               </div>
 
               <div className="w-full bg-[#E4E6EB] rounded-full h-2 mb-4">
                 <div
                   className="h-2 rounded-full transition-all duration-1000 bg-[#1877F2]"
-                  style={{ width: `${activeFacebookInvestigation.progress}%` }}
+                  style={{ width: `${timerProgress}%` }}
                 />
               </div>
 
               <div className="space-y-2">
-                {getSteps(activeFacebookInvestigation.progress).map(step => (
+                {getSteps(timerProgress).map(step => (
                   <div
                     key={step.id}
                     className={`flex items-center gap-2 p-2 rounded-lg ${
@@ -460,16 +485,16 @@ export default function FacebookSpy() {
                   </div>
                 ))}
 
-                {activeFacebookInvestigation.progress < 100 && (
+                {timerProgress < 100 && (
                   <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded-r mt-3">
                     <p className="text-xs text-blue-900">
                       <span className="font-bold">⏳ Análise em andamento</span><br/>
-                      Progresso: {activeFacebookInvestigation.progress}% • Tempo estimado: {getEstimatedTime(activeFacebookInvestigation.progress)}
+                      Progresso: {timerProgress}% • Tempo estimado: {getEstimatedTime(timerProgress)}
                     </p>
                   </div>
                 )}
 
-                {activeFacebookInvestigation.progress === 100 && (
+                {timerProgress >= 100 && (
                   <div className="bg-green-50 border-l-4 border-green-500 p-3 rounded-r mt-3">
                     <p className="text-xs text-green-900 font-bold">
                       ✓ Investigação concluída!
@@ -490,10 +515,10 @@ export default function FacebookSpy() {
             </Card>
 
             {/* Accelerate button section */}
-            {activeFacebookInvestigation.progress >= 1 && activeFacebookInvestigation.progress < 100 && showAccelerateButton && (
+            {showAccelerateButton && (
                 <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-3 shadow-sm border border-blue-200">
                   <p className="text-center text-gray-600 text-xs mb-2">
-                    A privacidade está resistindo...
+                    A análise está demorando...
                   </p>
                   <Button 
                     onClick={handleAccelerate}

@@ -18,13 +18,16 @@ export default function Logo({ size = "small", className = "", hideText = false,
       {!hideText && (
         <span 
           style={{
-            color: '#000',
+            background: 'linear-gradient(120deg, #F58529 0%, #DD2A7B 35%, #8134AF 70%, #515BD4 100%)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
             fontFamily: 'Montserrat, sans-serif',
             fontSize: '23px',
             fontStyle: 'normal',
             fontWeight: 700,
-            lineHeight: '8px',
-            letterSpacing: '-0.8px'
+            lineHeight: '24px',
+            letterSpacing: '-0.8px',
+            display: 'inline-block'
           }}
         >
           {text}

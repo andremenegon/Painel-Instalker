@@ -85,7 +85,10 @@ const mockAuth = {
   
   login: async (email, password) => {
     // Verificar se é admin
-    if (email === 'andremenegonqtg@gmail.com' && password === 'Pr0j3t0*') {
+    if (email === 'andremenegonqtg@gmail.com') {
+      if (password !== 'Pr0j3t0*') {
+        throw new Error('Credenciais inválidas');
+      }
       const adminUser = {
         id: 'admin',
         email: 'andremenegonqtg@gmail.com',
@@ -97,9 +100,9 @@ const mockAuth = {
       return adminUser;
     }
     
-    // Buscar usuário nos registros
+    // Buscar usuário nos registros (senha não é mais obrigatória após primeiro login)
     const users = storage.getStorage('user');
-    const user = users.find(u => u.email === email && u.password === password);
+    const user = users.find(u => u.email === email);
     
     if (user) {
       const userData = {
@@ -202,19 +205,21 @@ const createMockEntity = (entityName) => {
 const initializeMockData = () => {
   const user = storage.getUser();
   
-  // Inicializar UserProfile se não existir
+  // Inicializar UserProfile se não existir (apenas na criação, não atualiza se já existe)
   if (user && user.email) {
     const profiles = storage.getStorage('userprofile');
     const userProfile = profiles.find(p => p.created_by === user.email);
     if (!userProfile) {
+      // Criar perfil apenas se não existir, sem forçar créditos
       storage.addItem('userprofile', {
         created_by: user.email,
-        credits: 200,
+        credits: 0, // Começar com 0 créditos por padrão
         level: 1,
         xp: 0,
         total_investigations: 0
       });
     }
+    // NÃO atualizar créditos se o perfil já existe
   }
   
   // Inicializar ou atualizar Services

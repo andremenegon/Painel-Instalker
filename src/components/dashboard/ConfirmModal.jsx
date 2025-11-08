@@ -14,8 +14,22 @@ export default function ConfirmModal({
 }) {
   if (!isOpen) return null;
 
+  const renderMessage = () => {
+    if (typeof message !== "string") {
+      return message;
+    }
+
+    const lines = message.split('\n');
+    return lines.map((line, idx) => (
+      <React.Fragment key={idx}>
+        {line.length === 0 ? <span>&nbsp;</span> : line}
+        {idx < lines.length - 1 && <br />}
+      </React.Fragment>
+    ));
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-24 pb-12 sm:pt-28 sm:pb-16 bg-black/50 animate-in fade-in duration-200">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[340px] p-5 animate-in fade-in zoom-in duration-200">
         <div className="text-center mb-4">
           <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-3 ${
@@ -30,9 +44,7 @@ export default function ConfirmModal({
           <h3 className="text-lg font-bold text-gray-900 mb-3">
             {title}
           </h3>
-          <p className="text-xs text-gray-600 leading-relaxed">
-            {message}
-          </p>
+          <p className="text-xs text-gray-600 leading-relaxed">{renderMessage()}</p>
         </div>
 
         <div className="space-y-2">

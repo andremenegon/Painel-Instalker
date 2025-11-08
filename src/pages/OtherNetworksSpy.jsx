@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, CheckCircle2, Loader2, Zap, Lock, AlertTriangle, Trash2, Share2, MapPin, Phone, User, Eye } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
+import { useInvestigationTimer } from "@/hooks/useInvestigationTimer";
+import { ensureTimer, getDurationForInvestigation, resetTimer } from "@/lib/progressManager";
 
 export default function OtherNetworksSpy() {
   const navigate = useNavigate();
@@ -18,10 +20,9 @@ export default function OtherNetworksSpy() {
   const [showCreditAlert, setShowCreditAlert] = useState(false);
   const [creditsSpent, setCreditsSpent] = useState(0);
   const [xpGained, setXpGained] = useState(0);
-  const [showAccelerateButton, setShowAccelerateButton] = useState(false);
   const autoStarted = useRef(false);
   const isCreating = useRef(false);
-  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [accelerating, setAccelerating] = useState(false);
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
   const [unlockedPackages, setUnlockedPackages] = useState({
     dating: false,
@@ -125,21 +126,47 @@ export default function OtherNetworksSpy() {
   });
 
   const activeInvestigation = investigations.find(
-    inv => inv.service_name === "Outras Redes" && (inv.status === "processing" || inv.status === "completed")
+    inv => inv.service_name === "Outras Redes" && inv.status === "processing"
   );
 
+  const completedInvestigation = investigations.find(
+    inv => inv.service_name === "Outras Redes" && (inv.status === "completed" || inv.status === "accelerated")
+  );
+
+  const currentInvestigation = activeInvestigation || completedInvestigation;
+
+  const {
+    progress: timerProgress,
+    canAccelerate,
+    accelerate: accelerateTimer,
+  } = useInvestigationTimer({ service: "Outras Redes", investigation: activeInvestigation || completedInvestigation });
+
+  const loadingProgress = activeInvestigation
+    ? timerProgress
+    : completedInvestigation
+      ? 100
+      : 0;
+
+  const showAccelerateButton = Boolean(activeInvestigation) && canAccelerate && !accelerating && loadingProgress > 0 && loadingProgress < 100;
+
+  const resultInvestigation = completedInvestigation || (loadingProgress >= 100 ? activeInvestigation : null);
+
   useEffect(() => {
-    if (!activeInvestigation) {
-      setLoadingProgress(0);
-    }
-  }, [activeInvestigation]);
+    if (!currentInvestigation) return;
+    ensureTimer({
+      service: "Outras Redes",
+      id: currentInvestigation.id,
+      durationMs: getDurationForInvestigation(currentInvestigation),
+      startAt: currentInvestigation.created_date ? new Date(currentInvestigation.created_date).getTime() : undefined,
+    });
+  }, [currentInvestigation?.id, currentInvestigation?.created_date, currentInvestigation?.estimated_days]);
 
   useEffect(() => {
     if (autoStarted.current || isCreating.current) return;
     if (!user || !userProfile) return;
     
     const hasActiveInvestigation = investigations.some(
-      inv => inv.service_name === "Outras Redes" && (inv.status === "processing" || inv.status === "completed")
+      inv => inv.service_name === "Outras Redes" && (inv.status === "processing" || inv.status === "completed" || inv.status === "accelerated")
     );
     
     if (hasActiveInvestigation) {
@@ -177,7 +204,7 @@ export default function OtherNetworksSpy() {
       // setUserProfile(prev => ({ ...prev, credits: updatedCredits, xp: updatedXp })); // Replaced by invalidateQueries
       queryClient.invalidateQueries(['userProfile', user?.email]);
       
-      await base44.entities.Investigation.create({
+      const newInvestigation = await base44.entities.Investigation.create({
         service_name: "Outras Redes",
         target_username: user.email,
         status: "processing",
@@ -186,6 +213,14 @@ export default function OtherNetworksSpy() {
         is_accelerated: false,
         created_by: user.email,
       });
+
+      ensureTimer({
+        service: "Outras Redes",
+        id: newInvestigation.id,
+        durationMs: getDurationForInvestigation(newInvestigation),
+        startAt: Date.now(),
+      });
+      setCurrentInvestigationId(newInvestigation.id);
       
       setCreditsSpent(40);
       setXpGained(20);
@@ -197,97 +232,15 @@ export default function OtherNetworksSpy() {
     })();
   }, [user?.email, userProfile, investigations, navigate, refetch, queryClient]); // Added userProfile and queryClient to dependencies
 
-  // ✅ PROGRESSO - 11 MIN (SALVA APENAS LOCALMENTE - NÃO NO BANCO)
   useEffect(() => {
-    if (!activeInvestigation) {
-      setLoadingProgress(0);
-      return;
+    if (!activeInvestigation) return;
+    if (loadingProgress >= 100 && activeInvestigation.status !== "completed") {
+      base44.entities.Investigation.update(activeInvestigation.id, {
+        progress: 100,
+        status: "completed",
+      }).then(() => refetch());
     }
-
-    let currentCalculatedProgress = activeInvestigation.progress;
-
-    // If investigation is still processing (not yet 100% in DB), check local storage for client-side progress
-    if (activeInvestigation.status === "processing" && activeInvestigation.progress < 100) {
-      const savedProgress = localStorage.getItem(`other_networks_progress_${activeInvestigation.id}`);
-      if (savedProgress) {
-        const parsedProgress = parseInt(savedProgress, 10);
-        // Use local storage progress if it's valid and higher than the DB progress
-        if (!isNaN(parsedProgress) && parsedProgress > currentCalculatedProgress) {
-          currentCalculatedProgress = parsedProgress;
-        }
-      }
-    }
-    
-    setLoadingProgress(currentCalculatedProgress);
-
-    // If already completed (either from DB or local storage initial check), no need to run timer
-    if (currentCalculatedProgress >= 100) {
-        // Ensure DB is eventually updated if local storage got to 100% first
-        if (activeInvestigation.progress < 100) {
-             base44.entities.Investigation.update(activeInvestigation.id, {
-                progress: 100,
-                status: "completed"
-            }).then(() => {
-                refetch();
-            });
-        }
-        return;
-    }
-    
-    const interval = 6600; // 11 minutos (total ~100 steps * 6.6s = 660s = 11 mins)
-    
-    const timer = setInterval(() => {
-      setLoadingProgress(prev => {
-        const newProgress = Math.min(100, prev + 1);
-        
-        // ✅ SALVAR APENAS NO LOCALSTORAGE
-        localStorage.setItem(`other_networks_progress_${activeInvestigation.id}`, newProgress.toString());
-        
-        // ✅ SALVAR NO BANCO APENAS AO COMPLETAR
-        if (newProgress >= 100) {
-          base44.entities.Investigation.update(activeInvestigation.id, {
-            progress: 100,
-            status: "completed"
-          }).then(() => {
-            // After successful DB update, remove local storage item
-            localStorage.removeItem(`other_networks_progress_${activeInvestigation.id}`);
-            refetch(); // Refetch to get the latest completed status
-          });
-          clearInterval(timer);
-        }
-        
-        return newProgress;
-      });
-    }, interval);
-    
-    return () => clearInterval(timer);
-  }, [activeInvestigation?.id, activeInvestigation?.progress, activeInvestigation?.status, refetch]);
-
-  useEffect(() => {
-    if (!activeInvestigation) {
-      setShowAccelerateButton(false);
-      return;
-    }
-    if (loadingProgress < 1 || loadingProgress >= 100) {
-      setShowAccelerateButton(false);
-      return;
-    }
-    
-    const storageKey = `accelerate_shown_${activeInvestigation.id}`;
-    const alreadyShown = localStorage.getItem(storageKey) === 'true';
-    
-    if (alreadyShown) {
-      setShowAccelerateButton(true);
-    } else {
-      setShowAccelerateButton(false);
-      const timer = setTimeout(() => {
-        setShowAccelerateButton(true);
-        localStorage.setItem(storageKey, 'true');
-      }, 5000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [activeInvestigation?.id, loadingProgress]);
+  }, [activeInvestigation?.id, activeInvestigation?.status, loadingProgress, refetch]);
 
   const handleAccelerate = async () => {
     if (!activeInvestigation || !userProfile || userProfile.credits < 30) {
@@ -307,6 +260,7 @@ export default function OtherNetworksSpy() {
     }
 
     try {
+      setAccelerating(true);
       playSound('turbo');
       const updatedCredits = userProfile.credits - 30;
       const updatedXp = userProfile.xp + 30;
@@ -315,25 +269,22 @@ export default function OtherNetworksSpy() {
         credits: updatedCredits,
         xp: updatedXp
       });
-      // setUserProfile(prev => ({ ...prev, credits: updatedCredits, xp: updatedXp })); // Replaced by invalidateQueries
       queryClient.invalidateQueries(['userProfile', user?.email]);
 
-      setLoadingProgress(100);
-      localStorage.setItem(`other_networks_progress_${activeInvestigation.id}`, '100'); // Ensure local storage is also 100
+      const boost = Math.floor(Math.random() * 11) + 20; // 20% - 30%
+      const newProgress = accelerateTimer(boost);
 
       await base44.entities.Investigation.update(activeInvestigation.id, {
-        progress: 100,
-        status: "completed"
+        progress: newProgress,
+        status: newProgress >= 100 ? "completed" : "processing"
       });
-      localStorage.removeItem(`other_networks_progress_${activeInvestigation.id}`);
-
 
       setCreditsSpent(30);
       setXpGained(30);
       setShowCreditAlert(true);
       setTimeout(() => setShowCreditAlert(false), 3000);
 
-      setTimeout(() => refetch(), 1000);
+      setTimeout(() => refetch(), 500);
     } catch (error) {
       console.error("❌ Erro ao acelerar:", error);
       setAlertConfig({
@@ -343,29 +294,31 @@ export default function OtherNetworksSpy() {
         onConfirm: () => setShowAlertModal(false)
       });
       setShowAlertModal(true);
+    } finally {
+      setAccelerating(false);
     }
   };
 
   const handleDeleteInvestigation = async () => {
     playSound('trash');
-    if (!activeInvestigation) return;
+    if (!currentInvestigation) return;
     setShowConfirmDelete(true);
   };
 
   const confirmDelete = async () => {
     playSound('trash');
-    if (!activeInvestigation) return;
+    if (!currentInvestigation) return;
     
     try {
-      localStorage.removeItem(`unlocked_packages_${activeInvestigation.id}`);
-      localStorage.removeItem(`other_networks_progress_${activeInvestigation.id}`); // Remove progress as well
+      localStorage.removeItem(`unlocked_packages_${currentInvestigation.id}`);
+      resetTimer({ service: "Outras Redes", id: currentInvestigation.id });
       setUnlockedPackages({ dating: false, adult: false, ashley: false, complete: false });
       
-      await base44.entities.Investigation.delete(activeInvestigation.id);
+      await base44.entities.Investigation.delete(currentInvestigation.id);
       
       queryClient.setQueryData(['investigations', user?.email], (oldData) => {
         if (!oldData) return [];
-        return oldData.filter(inv => inv.id !== activeInvestigation.id);
+        return oldData.filter(inv => inv.id !== currentInvestigation.id);
       });
       
       await queryClient.invalidateQueries({ queryKey: ['investigations'] });
@@ -420,8 +373,8 @@ export default function OtherNetworksSpy() {
       }
       setUnlockedPackages(newUnlocked);
       
-      if (activeInvestigation?.id) {
-        localStorage.setItem(`unlocked_packages_${activeInvestigation.id}`, JSON.stringify(newUnlocked));
+      if (currentInvestigation?.id) {
+        localStorage.setItem(`unlocked_packages_${currentInvestigation.id}`, JSON.stringify(newUnlocked));
       }
       
       setCreditsSpent(credits);
@@ -446,18 +399,18 @@ export default function OtherNetworksSpy() {
   };
 
   useEffect(() => {
-    if (!activeInvestigation?.id) {
+    if (!currentInvestigation?.id) {
       setUnlockedPackages({ dating: false, adult: false, ashley: false, complete: false });
       setCurrentInvestigationId(null);
       return;
     }
     
-    if (currentInvestigationId !== activeInvestigation.id) {
-      setCurrentInvestigationId(activeInvestigation.id);
+    if (currentInvestigationId !== currentInvestigation.id) {
+      setCurrentInvestigationId(currentInvestigation.id);
       setUnlockedPackages({ dating: false, adult: false, ashley: false, complete: false });
     }
     
-    const savedUnlocked = localStorage.getItem(`unlocked_packages_${activeInvestigation.id}`);
+    const savedUnlocked = localStorage.getItem(`unlocked_packages_${currentInvestigation.id}`);
     if (savedUnlocked) {
       try {
         setUnlockedPackages(JSON.parse(savedUnlocked));
@@ -465,7 +418,7 @@ export default function OtherNetworksSpy() {
         console.error("Erro ao carregar pacotes:", error);
       }
     }
-  }, [activeInvestigation?.id, currentInvestigationId]);
+  }, [currentInvestigation?.id, currentInvestigationId]);
 
   useEffect(() => {
     if (!user || investigations.length === 0) return;
@@ -601,6 +554,7 @@ export default function OtherNetworksSpy() {
               {showAccelerateButton && (
                 <Button 
                   onClick={handleAccelerate}
+                  disabled={accelerating}
                   className="w-full h-10 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold text-sm rounded-lg shadow-sm"
                 >
                   <Zap className="w-4 h-4 mr-2" />
@@ -660,7 +614,7 @@ export default function OtherNetworksSpy() {
     );
   }
 
-  if (activeInvestigation && loadingProgress >= 100) {
+  if (resultInvestigation) {
     return (
       <>
         <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">

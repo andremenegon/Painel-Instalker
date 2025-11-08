@@ -1,11 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Instagram, Lock, Zap, Shield, AlertTriangle, Trash2 } from "lucide-react";
+import { ArrowLeft, Lock, Zap, AlertTriangle, Trash2, Loader2 } from "lucide-react";
+import InstagramAppIcon from "@/components/icons/InstagramAppIcon";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
 
@@ -18,7 +19,12 @@ export default function InstagramSpyResults() {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [alertConfig, setAlertConfig] = useState({});
-  const [unlockedPassword, setUnlockedPassword] = useState(false);
+  const [passwordUnlockStatus, setPasswordUnlockStatus] = useState('idle'); // 'idle' | 'processing' | 'failed'
+  const [passwordUnlockProgress, setPasswordUnlockProgress] = useState(0);
+  const [remainingHours, setRemainingHours] = useState(36);
+  const progressIntervalRef = useRef(null);
+  const [showIntroSequence, setShowIntroSequence] = useState(true);
+  const [introStep, setIntroStep] = useState(0);
 
   const { data: user } = useQuery({
     queryKey: ['currentUser'],
@@ -54,6 +60,139 @@ export default function InstagramSpyResults() {
   const completedInstagramInvestigation = investigations.find(
     inv => inv.service_name === "Instagram" && (inv.status === "completed" || inv.status === "accelerated")
   );
+
+  const finalizePasswordUnlock = useCallback(() => {
+    if (!completedInstagramInvestigation) return;
+    const statusKey = `password_unlock_status_${completedInstagramInvestigation.id}`;
+    const progressKey = `password_unlock_progress_${completedInstagramInvestigation.id}`;
+
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+
+    setPasswordUnlockStatus('failed');
+    setPasswordUnlockProgress(100);
+    setRemainingHours(0);
+    localStorage.setItem(statusKey, 'failed');
+    localStorage.setItem(progressKey, '100');
+  }, [completedInstagramInvestigation]);
+
+  const targetUsername = useMemo(() => {
+    if (!completedInstagramInvestigation) return "";
+    const username = completedInstagramInvestigation.target_username || "perfil";
+    return username.startsWith('@') ? username : `@${username}`;
+  }, [completedInstagramInvestigation]);
+
+  useEffect(() => {
+    if (!completedInstagramInvestigation) {
+      setShowIntroSequence(false);
+      return;
+    }
+
+    const introShownKey = `instagram_intro_shown_${completedInstagramInvestigation.id}`;
+    const hasSeenIntro = localStorage.getItem(introShownKey) === 'true';
+
+    if (hasSeenIntro) {
+      setShowIntroSequence(false);
+      return;
+    }
+
+    setShowIntroSequence(true);
+    setIntroStep(0);
+
+    const stepsTotal = 3;
+    const stepDuration = 1600;
+    let currentStep = 0;
+
+    const interval = setInterval(() => {
+      currentStep += 1;
+      if (currentStep >= stepsTotal) {
+        clearInterval(interval);
+        localStorage.setItem(introShownKey, 'true');
+        setShowIntroSequence(false);
+      } else {
+        setIntroStep(currentStep);
+      }
+    }, stepDuration);
+
+    return () => clearInterval(interval);
+  }, [completedInstagramInvestigation?.id]);
+
+  // Carregar estado do desbloqueio de senha do localStorage
+  useEffect(() => {
+    if (!completedInstagramInvestigation) return;
+    
+    const unlockStartKey = `password_unlock_start_${completedInstagramInvestigation.id}`;
+    const unlockProgressKey = `password_unlock_progress_${completedInstagramInvestigation.id}`;
+    const unlockAcceleratedKey = `password_unlock_accelerated_${completedInstagramInvestigation.id}`;
+    const unlockStatusKey = `password_unlock_status_${completedInstagramInvestigation.id}`;
+    
+    const savedStatus = localStorage.getItem(unlockStatusKey);
+    const normalizedStatus = savedStatus === 'completed' || savedStatus === 'accelerated'
+      ? 'failed'
+      : savedStatus;
+    const savedProgress = parseInt(localStorage.getItem(unlockProgressKey) || '0', 10);
+    const savedStartTime = parseInt(localStorage.getItem(unlockStartKey) || '0');
+    
+    if (normalizedStatus === 'failed') {
+      finalizePasswordUnlock();
+      return;
+    }
+    
+    if (normalizedStatus === 'processing' && savedProgress >= 100) {
+      finalizePasswordUnlock();
+      return;
+    }
+
+    if (normalizedStatus === 'processing' && savedStartTime > 0) {
+      setPasswordUnlockStatus('processing');
+      
+      // Calcular progresso baseado no tempo decorrido
+      const initialTimestamp = Date.now();
+      const initialElapsed = initialTimestamp - savedStartTime;
+      const totalDurationMs = 36 * 60 * 60 * 1000; // 36 horas em ms
+      const calculatedProgress = Math.min(100, Math.round((initialElapsed / totalDurationMs) * 100));
+      setPasswordUnlockProgress(calculatedProgress);
+      
+      // Se já completou
+      if (calculatedProgress >= 100) {
+        finalizePasswordUnlock();
+        return;
+      }
+      
+      // Iniciar intervalo de atualização do progresso
+      progressIntervalRef.current = setInterval(() => {
+        const now = Date.now();
+        const elapsed = now - savedStartTime;
+        const totalDurationMs = 36 * 60 * 60 * 1000; // 36 horas
+        const progress = Math.min(100, Math.round((elapsed / totalDurationMs) * 100));
+        const remaining = Math.max(0, Math.ceil((totalDurationMs - elapsed) / (60 * 60 * 1000)));
+        
+        setPasswordUnlockProgress(progress);
+        setRemainingHours(remaining);
+        localStorage.setItem(unlockProgressKey, progress.toString());
+        
+        if (progress >= 100) {
+          finalizePasswordUnlock();
+        }
+      }, 60000); // Atualizar a cada minuto
+      
+      // Calcular horas restantes inicial
+      const now = Date.now();
+      const elapsed = now - savedStartTime;
+      const totalDurationMsInitial = 36 * 60 * 60 * 1000;
+      const remaining = Math.max(0, Math.ceil((totalDurationMsInitial - elapsed) / (60 * 60 * 1000)));
+      setRemainingHours(remaining);
+    }
+    
+    return () => {
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
+    };
+  }, [completedInstagramInvestigation, finalizePasswordUnlock]);
 
   const playSound = (type) => {
     if (typeof window === 'undefined') return;
@@ -106,7 +245,7 @@ export default function InstagramSpyResults() {
       playSound('error');
       setAlertConfig({
         title: "Créditos Insuficientes",
-        message: "Você precisa de 50 créditos para tentar descriptografar a senha.",
+        message: "Você precisa de 50 créditos para iniciar o desbloqueio da senha.",
         confirmText: "Comprar Créditos",
         onConfirm: () => {
           setShowAlertModal(false);
@@ -117,10 +256,12 @@ export default function InstagramSpyResults() {
       return;
     }
 
+    if (!completedInstagramInvestigation) return;
+
     playSound('unlock');
     await base44.entities.UserProfile.update(userProfile.id, {
       credits: userProfile.credits - 50,
-      xp: userProfile.xp + 30
+      xp: (userProfile.xp || 0) + 30
     });
     queryClient.invalidateQueries(['userProfile', user?.email]);
 
@@ -129,7 +270,123 @@ export default function InstagramSpyResults() {
     setShowCreditAlert(true);
     setTimeout(() => setShowCreditAlert(false), 3000);
 
-    setUnlockedPassword(true);
+    // Iniciar processo de desbloqueio (36 horas)
+    const startTime = Date.now();
+    const unlockStartKey = `password_unlock_start_${completedInstagramInvestigation.id}`;
+    const unlockProgressKey = `password_unlock_progress_${completedInstagramInvestigation.id}`;
+    const unlockStatusKey = `password_unlock_status_${completedInstagramInvestigation.id}`;
+    const unlockAcceleratedKey = `password_unlock_accelerated_${completedInstagramInvestigation.id}`;
+    
+    localStorage.setItem(unlockStartKey, startTime.toString());
+    localStorage.setItem(unlockProgressKey, '0');
+    localStorage.setItem(unlockStatusKey, 'processing');
+    localStorage.setItem(unlockAcceleratedKey, 'false');
+    
+    setPasswordUnlockStatus('processing');
+    setPasswordUnlockProgress(0);
+    
+    // Atualizar progresso a cada minuto
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+    }
+    
+    setRemainingHours(36);
+    
+    progressIntervalRef.current = setInterval(() => {
+      const now = Date.now();
+      const elapsed = now - startTime;
+      const totalDurationMs = 36 * 60 * 60 * 1000; // 36 horas
+      const progress = Math.min(100, Math.round((elapsed / totalDurationMs) * 100));
+      const remaining = Math.max(0, Math.ceil((totalDurationMs - elapsed) / (60 * 60 * 1000)));
+      
+      setPasswordUnlockProgress(progress);
+      setRemainingHours(remaining);
+      localStorage.setItem(unlockProgressKey, progress.toString());
+      
+      if (progress >= 100) {
+        finalizePasswordUnlock();
+      }
+    }, 60000); // Atualizar a cada minuto
+  };
+
+  const handleAcceleratePasswordUnlock = async () => {
+    playSound('click');
+    
+    if (!userProfile || userProfile.credits < 30) {
+      playSound('error');
+      setAlertConfig({
+        title: "Créditos Insuficientes",
+        message: "Você precisa de 30 créditos para acelerar o desbloqueio.",
+        confirmText: "Comprar Créditos",
+        onConfirm: () => {
+          setShowAlertModal(false);
+          navigate(createPageUrl("BuyCredits"));
+        }
+      });
+      setShowAlertModal(true);
+      return;
+    }
+
+    if (!completedInstagramInvestigation) return;
+
+    playSound('unlock');
+    await base44.entities.UserProfile.update(userProfile.id, {
+      credits: userProfile.credits - 30,
+      xp: (userProfile.xp || 0) + 20
+    });
+    queryClient.invalidateQueries(['userProfile', user?.email]);
+
+    setCreditsSpent(30);
+    setXpGained(20);
+    setShowCreditAlert(true);
+    setTimeout(() => setShowCreditAlert(false), 3000);
+
+    const unlockStatusKey = `password_unlock_status_${completedInstagramInvestigation.id}`;
+    const unlockProgressKey = `password_unlock_progress_${completedInstagramInvestigation.id}`;
+    const unlockAcceleratedKey = `password_unlock_accelerated_${completedInstagramInvestigation.id}`;
+
+    const boost = Math.floor(Math.random() * 11) + 20; // 20-30%
+    const baseProgress = passwordUnlockProgress || 0;
+    const acceleratedProgress = Math.min(100, baseProgress + boost);
+
+    const acceleratedFlag = true;
+    setPasswordUnlockStatus('processing');
+    setPasswordUnlockProgress(acceleratedProgress);
+
+    const estimatedRemainingHours = Math.max(0, Math.ceil((100 - acceleratedProgress) * 0.36));
+    setRemainingHours(estimatedRemainingHours);
+
+    localStorage.setItem(unlockStatusKey, 'processing');
+    localStorage.setItem(unlockProgressKey, acceleratedProgress.toString());
+    localStorage.setItem(unlockAcceleratedKey, 'true');
+
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+
+    // Reiniciar intervalo com base no novo progresso acelerado
+    progressIntervalRef.current = setInterval(() => {
+      const savedStartKey = `password_unlock_start_${completedInstagramInvestigation.id}`;
+      const storedStart = parseInt(localStorage.getItem(savedStartKey) || Date.now().toString(), 10);
+      const totalDurationMs = 36 * 60 * 60 * 1000;
+      const elapsed = Date.now() - storedStart;
+      const progress = Math.min(100, Math.round((elapsed / totalDurationMs) * 100));
+      const mergedProgress = Math.max(progress, acceleratedProgress);
+      const remaining = Math.max(0, Math.ceil((totalDurationMs - elapsed) / (60 * 60 * 1000)));
+
+      setPasswordUnlockProgress(mergedProgress);
+      setRemainingHours(remaining);
+      localStorage.setItem(unlockProgressKey, mergedProgress.toString());
+
+      if (mergedProgress >= 100) {
+        finalizePasswordUnlock();
+      }
+    }, 60000);
+
+    if (acceleratedProgress >= 100) {
+      finalizePasswordUnlock();
+    }
   };
 
   const handleDeleteInvestigation = () => {
@@ -145,6 +402,15 @@ export default function InstagramSpyResults() {
     try {
       localStorage.removeItem(`instagram_start_${completedInstagramInvestigation.id}`);
       localStorage.removeItem(`accelerate_shown_${completedInstagramInvestigation.id}`);
+      localStorage.removeItem(`password_unlock_start_${completedInstagramInvestigation.id}`);
+      localStorage.removeItem(`password_unlock_progress_${completedInstagramInvestigation.id}`);
+      localStorage.removeItem(`password_unlock_status_${completedInstagramInvestigation.id}`);
+      localStorage.removeItem(`password_unlock_accelerated_${completedInstagramInvestigation.id}`);
+      
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+        progressIntervalRef.current = null;
+      }
 
       await base44.entities.Investigation.delete(completedInstagramInvestigation.id);
       
@@ -173,15 +439,43 @@ export default function InstagramSpyResults() {
 
   if (!completedInstagramInvestigation) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <Card className="bg-white border-0 shadow-lg p-6 max-w-md mx-4 text-center">
-          <AlertTriangle className="w-12 h-12 text-orange-500 mx-auto mb-3" />
-          <h3 className="text-lg font-bold text-gray-900 mb-2">Investigação não encontrada</h3>
-          <p className="text-sm text-gray-600 mb-4">Não há nenhuma investigação completa do Instagram.</p>
-          <Button onClick={() => navigate(createPageUrl("Dashboard"))} className="w-full gradient-primary text-white">
-            Voltar ao Dashboard
-          </Button>
-        </Card>
+      <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0] flex items-center justify-center p-4">
+        <div className="text-center">
+          <Loader2 className="w-10 h-10 animate-spin text-[#FF6B55] mx-auto" />
+          <p className="text-sm text-gray-600 mt-3">Carregando investigação...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (showIntroSequence) {
+    const messages = [
+      `Invadindo Instagram de ${targetUsername}...`,
+      "Testando combinações de senhas...",
+      "Senha protegida por criptografia." 
+    ];
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0] flex items-center justify-center p-6">
+        <div className="max-w-sm w-full bg-white rounded-2xl p-6 shadow-lg border border-[#FFE0D2]">
+          <div className="flex items-center justify-center mb-4">
+            <div className="w-12 h-12 rounded-full bg-[#FFE0D2] flex items-center justify-center animate-pulse">
+              <InstagramAppIcon size="md" className="flex-shrink-0" />
+            </div>
+          </div>
+          <p className="text-center text-xs uppercase tracking-[0.3em] text-[#FF6B55]/70 mb-3">
+            Processo em andamento
+          </p>
+          <p className="text-center text-sm font-semibold text-[#1F2937] leading-relaxed">
+            {messages[introStep]}
+          </p>
+          <div className="mt-6 h-1.5 bg-[#FFE0D2]/60 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-[#FFB199] to-[#FF6B55] transition-all duration-1500 ease-out"
+              style={{ width: `${((introStep + 1) / messages.length) * 100}%` }}
+            />
+          </div>
+        </div>
       </div>
     );
   }
@@ -209,18 +503,16 @@ export default function InstagramSpyResults() {
           {/* ALERTA DE SENHA CRIPTOGRAFADA */}
           <Card className="bg-gradient-to-br from-red-50 to-orange-50 border-2 border-red-200 p-5 mb-3">
             <div className="flex items-start gap-3 mb-3">
-              <div className="w-12 h-12 rounded-xl bg-red-500 flex items-center justify-center flex-shrink-0">
-                <Shield className="w-6 h-6 text-white" />
-              </div>
+              <InstagramAppIcon size="md" className="flex-shrink-0" />
               <div className="flex-1">
                 <h3 className="text-base font-bold text-gray-900 mb-1">🔐 Senha Criptografada</h3>
                 <p className="text-xs text-gray-700 leading-relaxed">
-                  Detectamos que a conta <span className="font-bold">@{completedInstagramInvestigation.target_username}</span> possui <span className="font-bold text-red-600">criptografia de nível militar</span> ativada. Não foi possível acessar a senha diretamente.
+                  A conta de <span className="font-bold">@{completedInstagramInvestigation.target_username}</span> possui <span className="font-bold text-red-600">código de 2 fatores ativado, </span> e por isso não foi possível acessar o instagram.
                 </p>
               </div>
             </div>
 
-            {!unlockedPassword ? (
+            {passwordUnlockStatus === 'idle' ? (
               <>
                 <div className="bg-white rounded-lg p-3 mb-3">
                   <p className="text-xs text-gray-700 mb-2">
@@ -229,7 +521,7 @@ export default function InstagramSpyResults() {
                   <ul className="text-xs text-gray-600 space-y-1 ml-4">
                     <li>• Quebra de criptografia AES-256</li>
                     <li>• Tentativa de descriptografar senha</li>
-                    <li>• Processo pode levar até 48h</li>
+                    <li>• Processo leva 36 horas</li>
                   </ul>
                 </div>
                 
@@ -238,32 +530,73 @@ export default function InstagramSpyResults() {
                   className="w-full h-12 bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white font-bold text-sm rounded-xl shadow-lg"
                 >
                   <Lock className="w-4 h-4 mr-2" />
-                  Tentar Descriptografar - 50 créditos
+                  Iniciar Desbloqueio - 50 créditos
                 </Button>
               </>
-            ) : (
-              <div className="bg-red-100 border border-red-300 rounded-lg p-4">
-                <div className="flex items-start gap-2 mb-3">
-                  <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-bold text-red-900 mb-1">Descriptografia Falhou</p>
-                    <p className="text-xs text-red-700 leading-relaxed">
-                      Após 48 horas de tentativas, não conseguimos quebrar a criptografia desta conta. O Instagram utiliza proteção de última geração.
+            ) : passwordUnlockStatus === 'processing' ? (
+              <div className="bg-blue-50 border border-blue-300 rounded-lg p-4">
+                <div className="flex items-start gap-3 mb-3">
+                  <Loader2 className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5 animate-spin" />
+                  <div className="flex-1">
+                    <p className="text-sm font-bold text-blue-900 mb-1">Desbloqueio em Andamento</p>
+                    <p className="text-xs text-blue-700 leading-relaxed mb-3">
+                      Quebrando criptografia AES-256... Isso pode levar até 36 horas.
+                    </p>
+                    
+                    {/* Barra de progresso */}
+                    <div className="w-full bg-blue-200 rounded-full h-2 mb-2">
+                      <div 
+                        className="bg-gradient-to-r from-blue-500 to-blue-600 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${passwordUnlockProgress}%` }}
+                      ></div>
+                    </div>
+                    <p className="text-xs text-blue-600 font-medium">{passwordUnlockProgress}% concluído</p>
+                    
+                    {/* Tempo restante estimado */}
+                    <p className="text-xs text-blue-600 mt-2">
+                      ⏱️ Tempo restante: aproximadamente {remainingHours} horas
                     </p>
                   </div>
                 </div>
                 
-                <div className="bg-white rounded-lg p-3">
-                  <p className="text-xs font-bold text-gray-900 mb-1">📋 Alternativas disponíveis:</p>
-                  <ul className="text-xs text-gray-600 space-y-1">
-                    <li>• Tente recuperar a senha através do e-mail</li>
-                    <li>• Use o serviço de Detetive Particular</li>
-                    <li>• Monitore outras redes sociais</li>
-                  </ul>
+                {passwordUnlockStatus === 'processing' && passwordUnlockProgress < 100 && (
+                  <Button
+                    onClick={handleAcceleratePasswordUnlock}
+                    className="w-full h-9 bg-gradient-to-r from-[#FF6B55] to-[#FF9478] hover:from-[#FF7D64] hover:to-[#ffa891] text-white text-xs rounded-lg"
+                  >
+                    Acelerar desbloqueio - 30 créditos
+                  </Button>
+                )}
+              </div>
+            ) : (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <div className="flex items-start gap-3 mb-2">
+                  <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-bold text-red-800 mb-1">Não foi possível completar a investigação </p>
+                    <p className="text-xs text-red-700 leading-relaxed">
+                      Lamentamos pela frustação. Nossa equipe tentará novamente automaticamente e você será avisado assim que houver novidades.
+                    </p>
+                  </div>
+                </div>
+                <div className="bg-white rounded-lg p-3 border border-red-100">
+                  <p className="text-xs text-gray-600">Progresso total</p>
+                  <p className="text-sm font-semibold text-gray-900">{passwordUnlockProgress}% concluído</p>
                 </div>
               </div>
             )}
           </Card>
+
+          {passwordUnlockStatus === 'failed' && (
+            <Card className="bg-gradient-to-br from-[#FFF0EA] via-[#FFE8DE] to-[#FFE0D2] border-0 shadow-md p-5 mb-3">
+              <h3 className="text-sm font-bold text-gray-900 mb-3">Estamos monitorando</h3>
+              <ul className="text-xs text-gray-700 space-y-2">
+                <li>• Vamos refazer a tentativa automaticamente nas próximas horas.</li>
+                <li>• Você receberá um alerta caso a senha seja liberada.</li>
+                <li>• Aproveite os demais dados do relatório enquanto aguardamos a liberação.</li>
+              </ul>
+            </Card>
+          )}
 
           {/* INFORMAÇÕES BÁSICAS DISPONÍVEIS */}
           <Card className="bg-white border-0 shadow-md p-4 mb-3">
@@ -289,47 +622,6 @@ export default function InstagramSpyResults() {
                   Alto • Criptografia Ativada
                 </Badge>
               </div>
-            </div>
-          </Card>
-
-          {/* SUGESTÕES DE OUTROS SERVIÇOS */}
-          <Card className="bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 p-5 mb-3">
-            <div className="flex items-start gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-purple-500 flex items-center justify-center flex-shrink-0">
-                <Zap className="w-5 h-5 text-white" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-sm font-bold text-gray-900 mb-1">💡 Sugestão</h3>
-                <p className="text-xs text-gray-700">
-                  Como não conseguimos acessar o Instagram, recomendamos tentar outros serviços disponíveis:
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Button
-                onClick={() => navigate(createPageUrl("Investigation") + "?service=WhatsApp")}
-                variant="outline"
-                className="w-full h-10 border-2 border-green-300 bg-green-50 hover:bg-green-100 text-green-700 font-semibold text-xs"
-              >
-                📱 WhatsApp Spy - 45 créditos
-              </Button>
-
-              <Button
-                onClick={() => navigate(createPageUrl("Investigation") + "?service=SMS")}
-                variant="outline"
-                className="w-full h-10 border-2 border-orange-300 bg-orange-50 hover:bg-orange-100 text-orange-700 font-semibold text-xs"
-              >
-                💬 SMS Spy - 30 créditos
-              </Button>
-
-              <Button
-                onClick={() => navigate(createPageUrl("Investigation") + "?service=Detetive Particular")}
-                variant="outline"
-                className="w-full h-10 border-2 border-gray-300 bg-gray-50 hover:bg-gray-100 text-gray-700 font-semibold text-xs"
-              >
-                🕵️ Detetive Particular - 150 créditos
-              </Button>
             </div>
           </Card>
 

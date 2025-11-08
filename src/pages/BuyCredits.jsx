@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Zap, Sparkles, Check, TrendingUp } from "lucide-react";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
-import Confetti from "../components/effects/Confetti";
 import Toast from "../components/effects/Toast";
 
 export default function BuyCredits() {
@@ -19,7 +18,6 @@ export default function BuyCredits() {
   const [purchaseDetails, setPurchaseDetails] = useState({});
 
   // ✅ Estados para efeitos
-  const [showConfetti, setShowConfetti] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
 
@@ -157,7 +155,6 @@ export default function BuyCredits() {
 
   return (
     <>
-      <Confetti show={showConfetti} onComplete={() => setShowConfetti(false)} />
       <Toast show={showToast} message={toastMessage} type="credits" onComplete={() => setShowToast(false)} />
 
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">

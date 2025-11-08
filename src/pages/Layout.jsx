@@ -1,31 +1,80 @@
 
 
 import React, { useState, useEffect } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { Shield, LogOut, Zap, Plus, User, Target } from "lucide-react";
+import { LogOut, Zap, Plus, User, Target, Lock, ArrowLeft } from "lucide-react";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import Logo from "@/components/dashboard/Logo";
+import logoFull from "@/assets/branding/instalker-logo-full.png";
+import fivecon from "@/assets/branding/fivecon.png";
+import { setLastEmail } from "@/utils/lastEmail";
+import { useQuery } from "@tanstack/react-query";
 
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [user, setUser] = useState(null);
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [showLGPD, setShowLGPD] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   // ✅ APENAS BUSCAR USER - SEM QUERIES PESADAS
   useEffect(() => {
     base44.auth.me().then(setUser).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    setIsMenuOpen(false);
+  }, [location.pathname]);
+
   const handleLogout = async () => {
+    if (user?.email) {
+      setLastEmail(user.email);
+    }
     await base44.auth.logout();
+    setIsMenuOpen(false);
   };
 
-  const showHeader = false;
+  const showHeader = currentPageName !== "Login" && currentPageName !== "Register";
   const showFooter = currentPageName === "Dashboard";
+  const isInvestigationPage = showHeader && ((currentPageName || "").toLowerCase().includes("spy") || (currentPageName || "").toLowerCase().includes("investigation"));
+
+  const { data: layoutUserProfile } = useQuery({
+    queryKey: ["layoutUserProfile", user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: showHeader && !!user?.email,
+    staleTime: 60 * 1000,
+  });
+
+  const credits = layoutUserProfile?.credits ?? 0;
+
+  const formattedTitle = (() => {
+    if (!currentPageName) return "";
+    const PAGE_TITLES = {
+      WhatsAppSpy: "WhatsApp",
+      WhatsAppSpyResults: "WhatsApp",
+      InstagramSpy: "Instagram",
+      InstagramSpyResults: "Instagram",
+      FacebookSpy: "Facebook",
+      FacebookSpyResults: "Facebook",
+      LocationSpy: "Localização GPS",
+      CameraSpy: "Câmera Remota",
+      OtherNetworksSpy: "Outras Redes",
+      DetectiveSpy: "Detetive Particular",
+      SMSSpy: "SMS",
+      CallsSpy: "Chamadas",
+      CallsSpyResults: "Chamadas",
+    };
+    if (PAGE_TITLES[currentPageName]) return PAGE_TITLES[currentPageName];
+    return currentPageName.replace(/([A-Z])/g, " $1").trim();
+  })();
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0] flex flex-col">
@@ -75,11 +124,177 @@ export default function Layout({ children, currentPageName }) {
         .pulse-glow {
           animation: pulse-glow 2s infinite;
         }
+
+        .bg-white.border-b.border-gray-200.sticky.top-0.z-10 {
+          display: none;
+        }
       `}</style>
 
-      <main className="flex-1">
+      {showHeader && (
+        <header
+          className="fixed top-0 inset-x-0 z-40"
+          style={{ height: '60px', backgroundColor: '#FFFFFF', borderBottom: '1.3px solid rgb(210, 210, 215)' }}
+        >
+          <div
+            className="max-w-6xl mx-auto flex items-center justify-between"
+            style={{ height: '60px', paddingLeft: '24px', paddingRight: '24px' }}
+          >
+            {isInvestigationPage ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigate(createPageUrl("Dashboard"));
+                  }}
+                  aria-label="Voltar"
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    padding: 0,
+                    width: '36px',
+                    height: '36px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <ArrowLeft className="w-5 h-5 text-gray-700" />
+                </button>
+
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '10px'
+                  }}
+                >
+                  <img src={fivecon} alt="Serviço" style={{ height: '24px', width: '24px', borderRadius: '5px' }} />
+                  <h1
+                    style={{
+                      fontSize: '16px',
+                      fontWeight: 700,
+                      color: '#111827'
+                    }}
+                  >
+                    {formattedTitle}
+                  </h1>
+                </div>
+
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    backgroundColor: '#FFF8F0',
+                    border: '1px solid rgba(255, 153, 102, 0.35)',
+                    borderRadius: '999px',
+                    padding: '6px 10px',
+                    minWidth: '68px',
+                    justifyContent: 'center',
+                    fontFamily: 'Montserrat, sans-serif'
+                  }}
+                >
+                  <Zap className="w-4 h-4 text-orange-500" />
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#EA580C' }}>{credits}</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <img src={logoFull} alt="In'Stalker" style={{ height: '25px', width: 'auto' }} />
+                <button
+                  type="button"
+                  onClick={() => setIsMenuOpen(true)}
+                  aria-label="Abrir menu"
+                  style={{
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    padding: 0,
+                    height: '14px',
+                    width: '24px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    gap: '3px'
+                  }}
+                >
+                  {[0, 1, 2].map((index) => (
+                    <span
+                      key={index}
+                      style={{ width: '20px', height: '2px', backgroundColor: '#4B5563', borderRadius: '999px' }}
+                    ></span>
+                  ))}
+                </button>
+              </>
+            )}
+          </div>
+        </header>
+      )}
+
+      <main className="flex-1" style={{ paddingTop: showHeader ? '60px' : '0' }}>
         {children}
       </main>
+
+      {isMenuOpen && (
+        <div
+          className="fixed inset-0 z-50"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.45)' }}
+          onClick={() => setIsMenuOpen(false)}
+        >
+          <div
+            className="h-full ml-auto flex flex-col"
+            style={{ width: '260px', maxWidth: '85vw', backgroundColor: '#FFFFFF', boxShadow: '-12px 0 30px rgba(17, 24, 39, 0.15)', borderTopLeftRadius: '16px', borderBottomLeftRadius: '16px', overflow: 'hidden' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid #E5E7EB', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <p style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Navegação</p>
+              <button
+                type="button"
+                onClick={() => setIsMenuOpen(false)}
+                aria-label="Fechar menu"
+                style={{ background: 'transparent', border: 'none', fontSize: '20px', color: '#6B7280', cursor: 'pointer', lineHeight: 1 }}
+              >
+                ×
+              </button>
+            </div>
+
+            <nav style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <Link
+                to={createPageUrl("BuyCredits")}
+                className="text-sm font-semibold text-gray-700 hover:text-orange-500 transition-colors"
+                onClick={() => setIsMenuOpen(false)}
+              >
+                Comprar créditos
+              </Link>
+              <Link
+                to={createPageUrl("Profile")}
+                className="text-sm font-semibold text-gray-700 hover:text-orange-500 transition-colors"
+                onClick={() => setIsMenuOpen(false)}
+              >
+                Ver perfil
+              </Link>
+              <Link
+                to={createPageUrl("Levels")}
+                className="text-sm font-semibold text-gray-700 hover:text-orange-500 transition-colors"
+                onClick={() => setIsMenuOpen(false)}
+              >
+                Recompensas
+              </Link>
+            </nav>
+
+            <div style={{ marginTop: 'auto', padding: '20px' }}>
+              <Button
+                onClick={handleLogout}
+                className="w-full flex items-center justify-center gap-2"
+              >
+                <LogOut className="w-4 h-4" />
+                Sair
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showFooter && (
         <footer className="bg-white/60 backdrop-blur-sm border-t border-orange-100 mt-auto">
@@ -93,12 +308,8 @@ export default function Layout({ children, currentPageName }) {
                   Plataforma líder em investigação digital. Tecnologia avançada para rastrear e descobrir informações.
                 </p>
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-orange-500 flex items-center justify-center">
-                    <img 
-                      src="https://qtrypzzcjebvfcihiynt.supabase.co/storage/v1/object/public/base44-prod/public/69063d1664aa1fb78b1a2c02/6d9509f89_Group11333.png" 
-                      alt="Logo"
-                      className="w-4 h-4"
-                    />
+                  <div className="flex items-center justify-center">
+                    <Lock className="w-4 h-4 text-gray-700" />
                   </div>
                   <div className="text-[10px] text-gray-500">
                     <p className="font-semibold text-gray-700">Certificado SSL</p>

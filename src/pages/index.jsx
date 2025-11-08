@@ -18,6 +18,8 @@ import BuyCredits from "./BuyCredits";
 
 import FacebookSpy from "./FacebookSpy";
 
+import FacebookSpyResults from "./FacebookSpyResults";
+
 import SMSSpy from "./SMSSpy";
 
 import CallsSpy from "./CallsSpy";
@@ -61,6 +63,8 @@ const PAGES = {
     BuyCredits: BuyCredits,
     
     FacebookSpy: FacebookSpy,
+    
+    FacebookSpyResults: FacebookSpyResults,
     
     SMSSpy: SMSSpy,
     
@@ -128,6 +132,8 @@ function PagesContent() {
                 <Route path="/BuyCredits" element={<BuyCredits />} />
                 
                 <Route path="/FacebookSpy" element={<FacebookSpy />} />
+                
+                <Route path="/FacebookSpyResults" element={<FacebookSpyResults />} />
                 
                 <Route path="/SMSSpy" element={<SMSSpy />} />
                 

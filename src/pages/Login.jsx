@@ -7,16 +7,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Mail, Lock, LogIn } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import Logo from "../components/dashboard/Logo";
 import { useQueryClient } from "@tanstack/react-query";
+import logoFull from "@/assets/branding/instalker-logo-full.png";
+import { getLastEmail, setLastEmail } from "@/utils/lastEmail";
 
 export default function Login() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [formData, setFormData] = useState({
-    email: "",
+  const [formData, setFormData] = useState(() => ({
+    email: getLastEmail() || "",
     password: ""
-  });
+  }));
   const [loading, setLoading] = useState(false);
 
   const [error, setError] = useState("");
@@ -43,6 +44,8 @@ export default function Login() {
       } else {
         navigate(createPageUrl("Dashboard"));
       }
+
+      setLastEmail(formData.email);
     } catch (error) {
       console.error("Erro ao fazer login:", error);
       setError("Email ou senha incorretos");
@@ -55,10 +58,8 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         {/* Logo */}
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center mb-3">
-            <Logo size="large" />
-          </div>
+        <div className="flex justify-center mb-[70px]">
+          <img src={logoFull} alt="In'Stalker" className="h-[29px] w-auto" />
         </div>
 
         {/* Card de Login */}

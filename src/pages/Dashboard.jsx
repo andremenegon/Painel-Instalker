@@ -63,13 +63,16 @@ export default function Dashboard() {
       try {
         const profiles = await base44.entities.UserProfile.filter({ created_by: userData.email });
         if (profiles.length === 0) {
+          // Criar perfil apenas se não existir, sem forçar créditos
           await base44.entities.UserProfile.create({
-            credits: 200,
+            created_by: userData.email,
+            credits: 0, // Começar com 0 créditos por padrão
             level: 1,
             xp: 0,
             total_investigations: 0
           });
         }
+        // NÃO atualizar créditos se o perfil já existe
       } catch (profileError) {
         console.error("Erro ao criar perfil:", profileError);
       }
@@ -141,11 +144,16 @@ export default function Dashboard() {
   const completedServiceNames = useMemo(() => 
     investigations
       .filter(inv => 
-        (inv.service_name === "Localização" || 
-         inv.service_name === "SMS" || 
-         inv.service_name === "Chamadas" || 
-         inv.service_name === "Câmera" ||
-         inv.service_name === "Outras Redes") && 
+        (
+          inv.service_name === "Instagram" ||
+          inv.service_name === "Facebook" ||
+          inv.service_name === "WhatsApp" ||
+          inv.service_name === "Localização" || 
+          inv.service_name === "SMS" || 
+          inv.service_name === "Chamadas" || 
+          inv.service_name === "Câmera" ||
+          inv.service_name === "Outras Redes"
+        ) && 
         (inv.status === "completed" || inv.status === "accelerated")
       )
       .map(inv => inv.service_name),
@@ -166,11 +174,19 @@ export default function Dashboard() {
       if (processed.has(inv.service_name)) return;
       
       const shouldShow = inv.status === "processing" ||
-        (inv.service_name === "Localização" && (inv.status === "completed" || inv.status === "accelerated")) ||
-        (inv.service_name === "SMS" && (inv.status === "completed" || inv.status === "accelerated")) ||
-        (inv.service_name === "Chamadas" && (inv.status === "completed" || inv.status === "accelerated")) ||
-        (inv.service_name === "Câmera" && (inv.status === "completed" || inv.status === "accelerated")) ||
-        (inv.service_name === "Outras Redes" && (inv.status === "completed" || inv.status === "accelerated"));
+        (
+          (
+            inv.service_name === "Instagram" ||
+            inv.service_name === "Facebook" ||
+            inv.service_name === "WhatsApp" ||
+            inv.service_name === "Localização" ||
+            inv.service_name === "SMS" ||
+            inv.service_name === "Chamadas" ||
+            inv.service_name === "Câmera" ||
+            inv.service_name === "Outras Redes"
+          ) &&
+          (inv.status === "completed" || inv.status === "accelerated")
+        );
       
       if (shouldShow) {
         active.push(inv);
@@ -233,7 +249,7 @@ export default function Dashboard() {
     const existingInvestigation = investigations.find(
       inv => inv.service_name === service.name && (
         inv.status === "processing" || 
-        ((inv.service_name === "Localização" || inv.service_name === "SMS" || inv.service_name === "Chamadas" || inv.service_name === "Câmera" || inv.service_name === "Redes Sociais" || inv.service_name === "Outras Redes") && 
+        ((inv.service_name === "Localização" || inv.service_name === "SMS" || inv.service_name === "Chamadas" || inv.service_name === "Câmera" || inv.service_name === "Redes Sociais" || inv.service_name === "Outras Redes" || inv.service_name === "WhatsApp" || inv.service_name === "Facebook") && 
          (inv.status === "completed" || inv.status === "accelerated"))
       )
     );
@@ -357,11 +373,14 @@ export default function Dashboard() {
           <div className="space-y-2">
             {activeInvestigations.map((investigation) => {
               const isCompleted = 
+                (investigation.service_name === "Instagram" && (investigation.status === "completed" || investigation.status === "accelerated")) ||
                 (investigation.service_name === "Localização" && (investigation.status === "completed" || investigation.status === "accelerated")) ||
                 (investigation.service_name === "SMS" && (investigation.status === "completed" || investigation.status === "accelerated")) ||
                 (investigation.service_name === "Chamadas" && (investigation.status === "completed" || investigation.status === "accelerated")) ||
                 (investigation.service_name === "Câmera" && (investigation.status === "completed" || investigation.status === "accelerated")) ||
-                (investigation.service_name === "Outras Redes" && (investigation.status === "completed" || investigation.status === "accelerated"));
+                (investigation.service_name === "Outras Redes" && (investigation.status === "completed" || investigation.status === "accelerated")) ||
+                (investigation.service_name === "Facebook" && (investigation.status === "completed" || investigation.status === "accelerated")) ||
+                (investigation.service_name === "WhatsApp" && ((investigation.status === "completed" || investigation.status === "accelerated") || (investigation.progress ?? 0) >= 100));
               
               // ✅ DASHBOARD APENAS LÊ O PROGRESSO DO BANCO - NÃO CALCULA NADA
               const displayProgress = investigation.progress || 0;
@@ -373,12 +392,13 @@ export default function Dashboard() {
                 displayUsername = "@" + investigation.target_username;
               } else if (investigation.service_name === "WhatsApp" || investigation.service_name === "SMS" || investigation.service_name === "Chamadas") {
                 displayUsername = formatPhoneDisplay(investigation.target_username);
+              } else if (investigation.service_name === "Facebook") {
+                const cleaned = (investigation.target_username || "").replace(/^fb\//i, "");
+                displayUsername = `fb/${cleaned}`;
               } else if (investigation.service_name === "Câmera") {
                 displayUsername = "Dispositivo Alvo";
               } else if (investigation.service_name === "Localização") {
                 displayUsername = "Rastreamento GPS";
-              } else if (investigation.service_name === "Facebook") {
-                displayUsername = investigation.target_username;
               } else {
                 displayUsername = investigation.target_username;
               }
@@ -443,7 +463,7 @@ export default function Dashboard() {
               inv.service_name === service.name && inv.status === "processing"
             );
             const displayProgress = investigation ? (investigation.progress || 0) : null;
-
+ 
             return (
               <ServiceCard
                 key={service.id}

@@ -1,42 +1,150 @@
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, CheckCircle2, Loader2, Zap, Lock, AlertTriangle, Trash2 } from "lucide-react";
+import { CheckCircle2, Loader2, Zap, Lock, AlertTriangle, Trash2 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import WhatsAppIcon from "../components/icons/WhatsAppIcon";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
-import Confetti from "../components/effects/Confetti";
 import Particles from "../components/effects/Particles";
 import Toast from "../components/effects/Toast";
 import ScreenShake from "../components/effects/ScreenShake";
+import { useInvestigationTimer } from "@/hooks/useInvestigationTimer";
+import { ensureTimer, getDurationForInvestigation, resetTimer, markCompleted } from "@/lib/progressManager";
 
-export default function WhatsAppSpy() {
+const accentColor = "#139352";
+
+const BRAZIL_PREFIX = "+55";
+
+const getBrazilDigits = (input = "") => {
+  const digits = (input || "").replace(/\D/g, "");
+  return digits.startsWith("55") ? digits.slice(2) : digits;
+};
+
+const getTargetDdd = (input = "") => {
+  const digits = (input || "").replace(/\D/g, "");
+  if (digits.startsWith("55") && digits.length >= 4) return digits.slice(2, 4);
+  if (digits.length >= 2) return digits.slice(0, 2);
+  return "11";
+};
+
+const formatPhoneLabel = (ddd, sequence) => {
+  const clean = sequence.replace(/\D/g, "").padStart(8, "0");
+  const first = clean.slice(0, 4);
+  const second = clean.slice(4, 8);
+  return `(${ddd}) 9${first}-${second}`;
+};
+
+const formatRelativeTimestamp = (minutesAgo) => {
+  const now = new Date();
+  const target = new Date(now.getTime() - minutesAgo * 60 * 1000);
+  const formatter = target.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const isToday = target.toDateString() === now.toDateString();
+  const isYesterday = target.toDateString() === yesterday.toDateString();
+
+  if (isToday) return `Hoje às ${formatter}`;
+  if (isYesterday) return `Ontem às ${formatter}`;
+  return `${target.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} às ${formatter}`;
+};
+
+function WhatsAppCardModal({
+  isOpen,
+  title,
+  message,
+  confirmText = "Ok",
+  cancelText = "Voltar",
+  onConfirm,
+  onCancel,
+}) {
+  if (!isOpen) return null;
+
+  const renderMessage = () => {
+    if (typeof message !== "string") {
+      return message;
+    }
+
+    const lines = message.split("\n");
+    return lines.map((line, idx) => (
+      <React.Fragment key={idx}>
+        {line.length === 0 ? <span>&nbsp;</span> : line}
+        {idx < lines.length - 1 && <br />}
+      </React.Fragment>
+    ));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 animate-in fade-in duration-200">
+      <div className="w-full max-w-md animate-in zoom-in duration-200">
+        <div className="relative rounded-3xl border border-[#CBEFD8] bg-gradient-to-br from-white via-[#F9FFFB] to-white shadow-2xl overflow-hidden">
+          <div className="absolute -top-24 -right-28 w-56 h-56 rounded-full bg-[#E7FBF0] opacity-70" aria-hidden="true" />
+          <div className="absolute -bottom-24 -left-24 w-48 h-48 rounded-full bg-[#F3FFF8] opacity-80" aria-hidden="true" />
+
+          <div className="relative p-6 space-y-5">
+              <div className="flex items-center gap-3">
+                <WhatsAppIcon size={52} />
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">{title}</h3>
+                <p className="text-xs text-gray-500">WhatsApp Spy</p>
+              </div>
+            </div>
+
+            <div className="bg-[#F3FFF8] border border-[#C7F0D8] rounded-2xl p-4 text-sm text-[#1C512F]">
+              {renderMessage()}
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Button
+                onClick={onConfirm}
+                className="h-11 rounded-2xl bg-gradient-to-r from-[#159A53] to-[#1FBF61] hover:from-[#118449] hover:to-[#18A956] text-white font-semibold shadow-md"
+              >
+                {confirmText}
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={onCancel}
+                className="h-10 rounded-2xl text-gray-600 font-semibold hover:bg-gray-100"
+              >
+                {cancelText}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function WhatsApp () {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [phoneDigits, setPhoneDigits] = useState("");
   const [showCreditAlert, setShowCreditAlert] = useState(false);
   const [creditsSpent, setCreditsSpent] = useState(0);
   const [xpGained, setXpGained] = useState(0);
-  const [showAccelerateButton, setShowAccelerateButton] = useState(false);
   const [loadingProgress, setLoadingProgress] = useState(0);
+  const [accelerating, setAccelerating] = useState(false);
   const [unlockedSections, setUnlockedSections] = useState({});
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [alertConfig, setAlertConfig] = useState({});
   const autoStarted = useRef(false); // New: autoStarted useRef
+  const completionNotifiedRef = useRef(false);
   
   // ✅ Estados para efeitos
-  const [showConfetti, setShowConfetti] = useState(false);
   const [showParticles, setShowParticles] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState('success');
   const [shakeScreen, setShakeScreen] = useState(0);
+  const [expandedChatId, setExpandedChatId] = useState(null);
+  const [downloadTask, setDownloadTask] = useState(null);
+  const [loadingHistoryFor, setLoadingHistoryFor] = useState(null);
 
   // ✅ USAR CACHE COMPARTILHADO DO USER
   const { data: user } = useQuery({
@@ -134,6 +242,51 @@ export default function WhatsAppSpy() {
     inv => inv.service_name === "WhatsApp" && (inv.status === "processing" || inv.status === "completed")
   );
 
+  const {
+    progress: timerProgress,
+    canAccelerate,
+    accelerate: accelerateTimer,
+  } = useInvestigationTimer({ service: "WhatsApp", investigation: activeWhatsAppInvestigation });
+
+  useEffect(() => {
+    if (activeWhatsAppInvestigation) {
+      setLoadingProgress(timerProgress);
+    } else {
+      setLoadingProgress(0);
+    }
+  }, [timerProgress, activeWhatsAppInvestigation?.id]);
+
+  useEffect(() => {
+    completionNotifiedRef.current = false;
+  }, [activeWhatsAppInvestigation?.id]);
+
+  useEffect(() => {
+    if (!activeWhatsAppInvestigation) {
+      return;
+    }
+
+    if (timerProgress >= 100 && !completionNotifiedRef.current) {
+      completionNotifiedRef.current = true;
+
+      (async () => {
+        try {
+          await base44.entities.Investigation.update(activeWhatsAppInvestigation.id, {
+            progress: 100,
+            status: "completed",
+          });
+
+          markCompleted({ service: "WhatsApp", id: activeWhatsAppInvestigation.id });
+          setLoadingProgress(100);
+          queryClient.invalidateQueries({ queryKey: ['investigations', user?.email] });
+          await refetch();
+        } catch (error) {
+          console.error("Erro ao finalizar investigação do WhatsApp:", error);
+          completionNotifiedRef.current = false;
+        }
+      })();
+    }
+  }, [timerProgress, activeWhatsAppInvestigation?.id, queryClient, refetch, user?.email]);
+ 
   // ✅ RESET autoStarted QUANDO COMPONENTE É MONTADO
   useEffect(() => {
     autoStarted.current = false;
@@ -142,124 +295,332 @@ export default function WhatsAppSpy() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!activeWhatsAppInvestigation) {
-      setLoadingProgress(0);
-    }
-  }, [activeWhatsAppInvestigation]);
+  const showAccelerateButton = canAccelerate && !accelerating && loadingProgress > 0 && loadingProgress < 100;
 
-  // ✅ PROGRESSO - 7 DIAS - SEM ATUALIZAR CACHE A CADA SEGUNDO
-  useEffect(() => {
-    if (!activeWhatsAppInvestigation) {
-      setLoadingProgress(0);
-      return;
-    }
+  const remainingDays = (() => {
+    if (loadingProgress >= 100) return 0;
+    const maxDays = 5;
+    const minDays = 0.5;
+    const remaining = maxDays * (1 - loadingProgress / 100);
+    const clamped = Math.max(minDays, remaining);
+    if (clamped <= minDays) return 'menos de 1';
+    if (clamped >= 1) return Math.round(clamped).toString();
+    return clamped.toFixed(1).replace('.0', '');
+  })();
 
-    const investigationId = activeWhatsAppInvestigation.id;
-    const startTimeKey = `whatsapp_start_${investigationId}`;
-    
-    if (!localStorage.getItem(startTimeKey)) {
-      localStorage.setItem(startTimeKey, Date.now().toString());
+  const targetDigits = useMemo(() => {
+    if (activeWhatsAppInvestigation?.target_username) {
+      return getBrazilDigits(activeWhatsAppInvestigation.target_username);
     }
+    if (phoneDigits) return getBrazilDigits(phoneDigits);
+    return "";
+  }, [activeWhatsAppInvestigation?.target_username, phoneDigits]);
 
-    const startTime = parseInt(localStorage.getItem(startTimeKey));
-    const targetDuration = 604800000; // ✅ 7 DIAS em ms
-    
-    let lastSavedProgress = activeWhatsAppInvestigation.progress;
-    
-    const updateProgress = async () => {
-      const elapsed = Date.now() - startTime;
-      let calculatedProgress = Math.min(100, Math.floor((elapsed / targetDuration) * 100));
-      
-      calculatedProgress = Math.max(calculatedProgress, activeWhatsAppInvestigation.progress);
-      
-      // ✅ ATUALIZAR APENAS ESTADO LOCAL (UI)
-      setLoadingProgress(calculatedProgress);
-      
-      // Salvar no banco a cada 10% de mudança
-      if (Math.floor(calculatedProgress / 10) > Math.floor(lastSavedProgress / 10)) {
-        lastSavedProgress = calculatedProgress;
-        try {
-          await base44.entities.Investigation.update(investigationId, {
-            progress: calculatedProgress
-          });
-          // ✅ ATUALIZAR CACHE APENAS QUANDO SALVAR NO BANCO
-          queryClient.setQueryData(['investigations', user?.email], (oldData) => {
-            if (!oldData) return oldData;
-            return oldData.map(inv => 
-              inv.id === investigationId ? { ...inv, progress: calculatedProgress } : inv
-            );
-          });
-        } catch (error) {
-          console.error("Erro ao salvar progresso:", error);
-        }
-      }
-      
-      if (calculatedProgress >= 100) {
-        if (activeWhatsAppInvestigation.status !== "completed" && activeWhatsAppInvestigation.status !== "accelerated") {
-          try {
-            await base44.entities.Investigation.update(investigationId, {
-              progress: 100,
-              status: "completed"
-            });
-            queryClient.setQueryData(['investigations', user?.email], (oldData) => {
-              if (!oldData) return oldData;
-              return oldData.map(inv => 
-                inv.id === investigationId ? { ...inv, progress: 100, status: "completed" } : inv
-              );
-            });
-            localStorage.removeItem(startTimeKey);
-            playSound('complete');
-            setShowConfetti(true);
-            setToastMessage('Investigação Completa! 🎉');
-            setToastType('success');
-            setShowToast(true);
-          } catch (error) {
-            console.error("Erro ao completar investigação:", error);
-          }
-        }
-      }
-    };
+  const targetDdd = useMemo(() => {
+    if (targetDigits?.length >= 2) return targetDigits.slice(0, 2);
+    return getTargetDdd(phoneDigits);
+  }, [targetDigits, phoneDigits]);
 
-    updateProgress();
-    const timer = setInterval(updateProgress, 1000);
-    
-    return () => clearInterval(timer);
-  }, [activeWhatsAppInvestigation?.id, activeWhatsAppInvestigation?.status, activeWhatsAppInvestigation?.progress, queryClient, user?.email, playSound]);
+  const maskContactNumber = useCallback((suffix) => {
+    const sanitized = suffix.replace(/[^0-9*]/g, '').padEnd(4, '*');
+    return `(${targetDdd}) 9883-${sanitized}`;
+  }, [targetDdd]);
 
-  useEffect(() => {
-    if (!activeWhatsAppInvestigation) {
-      setShowAccelerateButton(false);
-      return;
+  const quickActions = useMemo(() => ([
+    {
+      key: 'fullReport',
+      label: 'Extrair PDF Completo',
+      icon: '📄',
+      unlockKey: 'quick_fullReport',
+      cost: 80,
+      description: 'Consolidamos conversas, anexos e evidências em um PDF com sumário investigativo.'
+    },
+    {
+      key: 'audioPack',
+      label: 'Baixar Áudios',
+      icon: '🎧',
+      unlockKey: 'quick_audioPack',
+      cost: 55,
+      description: 'Organizamos todos os áudios e notas de voz em um pacote único, pronto para download.'
+    },
+    {
+      key: 'contactsExport',
+      label: 'Exportar Contatos',
+      icon: '📇',
+      unlockKey: 'quick_contactsExport',
+      cost: 40,
+      description: 'Geramos uma planilha com todos os contatos relevantes, marcando vínculos e tags suspeitas.'
+    },
+    {
+      key: 'suspiciousCalls',
+      label: 'Ver Chamadas Suspeitas',
+      icon: '📞',
+      unlockKey: 'quick_suspiciousCalls',
+      cost: 45,
+      description: 'Destacamos as ligações que fogem do padrão, com duração, recorrência e horários críticos.'
     }
-    if (loadingProgress < 1 || loadingProgress >= 100) {
-      setShowAccelerateButton(false);
-      return;
-    }
-    
-    const storageKey = `accelerate_shown_${activeWhatsAppInvestigation.id}`;
-    const alreadyShown = localStorage.getItem(storageKey) === 'true';
-    
-    if (alreadyShown) {
-      setShowAccelerateButton(true);
-    } else {
-      setShowAccelerateButton(false);
-      const timer = setTimeout(() => {
-        setShowAccelerateButton(true);
-        localStorage.setItem(storageKey, 'true');
-      }, 5000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [activeWhatsAppInvestigation?.id, loadingProgress]);
+  ]), []);
 
-  const startInvestigation = useCallback(async (phoneArg = phoneNumber) => { // Modified: added phoneArg
+  const conversationInsights = useMemo(() => ([
+    {
+      id: 'highlight-1',
+      contact: maskContactNumber('53**'),
+      summary: 'Pediu sigilo logo após apagar anexos íntimos que haviam sido enviados minutos antes.',
+      label: 'Prioridade alta',
+      badgeClass: 'bg-red-100 text-red-700',
+      minutesAgo: 37,
+    },
+    {
+      id: 'highlight-2',
+      contact: maskContactNumber('78**'),
+      summary: 'Retomou a conversa às 05h22 cobrando o encontro que ficou combinado durante a madrugada.',
+      label: 'Acompanhar',
+      badgeClass: 'bg-yellow-100 text-yellow-700',
+      minutesAgo: 312,
+    },
+    {
+      id: 'highlight-3',
+      contact: maskContactNumber('94**'),
+      summary: 'Disparou sequência de áudios e anexos criptografados solicitando sigilo total.',
+      label: 'Risco moderado',
+      badgeClass: 'bg-emerald-100 text-emerald-700',
+      minutesAgo: 18,
+    }
+  ]), [maskContactNumber]);
+
+  const conversationThreads = useMemo(() => ([
+    {
+      id: 'thread-01',
+      unlockKey: 'chat_thread_01',
+      cost: 40,
+      contact: maskContactNumber('53**'),
+      preview: 'Então me espera com a luz baixa e sem nada por baixo.',
+      lastActivityMinutes: 32,
+      messages: [
+        { from: 'contact', text: 'Abre a porta lateral às 22h, tô levando o vinho que você gosta.' },
+        { from: 'target', text: 'Tô dizendo que é reunião... entra em silêncio.' },
+        { from: 'contact', text: 'Se enrolar de novo, mando aquele vídeo pro seu e-mail corporativo.' },
+        { from: 'target', text: 'Então me espera com a luz baixa e sem nada por baixo.' }
+      ]
+    },
+    {
+      id: 'thread-02',
+      unlockKey: 'chat_thread_02',
+      cost: 40,
+      contact: maskContactNumber('78**'),
+      preview: 'Te espero na garagem com a taça e sem nada além dela.',
+      lastActivityMinutes: 190,
+      messages: [
+        { from: 'target', text: 'A desculpa do happy hour colou de novo. Tô a caminho.' },
+        { from: 'contact', text: 'Quero você com a camisa azul desabotoada, igual ontem.' },
+        { from: 'target', text: 'Você sabe provocar. Já tô estacionando.' },
+        { from: 'contact', text: 'Te espero na garagem com a taça e sem nada além dela.' }
+      ]
+    },
+    {
+      id: 'thread-03',
+      unlockKey: 'chat_thread_03',
+      cost: 40,
+      contact: maskContactNumber('94**'),
+      preview: 'Tá enviando agora... guarda a chave com você.',
+      lastActivityMinutes: 8,
+      messages: [
+        { from: 'contact', text: 'Já reservei o quarto 405 de novo. Check-in no seu nome.' },
+        { from: 'target', text: 'Apaga o chat depois disso, tô paranoico.' },
+        { from: 'contact', text: 'Sem comprovante não tem surpresa. Quero foto no espelho.' },
+        { from: 'target', text: 'Tá enviando agora... guarda a chave com você.' }
+      ]
+    }
+  ]), [maskContactNumber]);
+
+  const handleUnlockSection = async (sectionKey, credits) => {
     playSound('click');
     
-    const phone = phoneArg; // Use the argument or the state
-
-    if (!phone || phone.replace(/\D/g, '').length < 10) {
+    if (!userProfile || userProfile.credits < credits) {
       playSound('error');
+      setShakeScreen(prev => prev + 1);
+      setAlertConfig({
+        title: "Créditos Insuficientes",
+        message: `Você precisa de ${credits} créditos para desbloquear este conteúdo.`,
+        confirmText: "Comprar Créditos",
+        onConfirm: () => {
+          playSound('click');
+          setShowAlertModal(false);
+          navigate(createPageUrl("BuyCredits"));
+        },
+        cancelText: "Voltar"
+      });
+      setShowAlertModal(true);
+      return false;
+    }
+
+    try {
+      
+      await base44.entities.UserProfile.update(userProfile.id, {
+        credits: userProfile.credits - credits,
+        xp: userProfile.xp + (credits / 2) // Half credits as XP
+      });
+      
+      queryClient.setQueryData(['userProfile', user?.email], (oldData) => {
+        if (!oldData) return oldData;
+        return oldData.map((profile) =>
+          profile.id === userProfile.id
+            ? { ...profile, credits: userProfile.credits - credits, xp: userProfile.xp + credits / 2 }
+            : profile
+        );
+      });
+      queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
+        if (!oldProfile) return oldProfile;
+        return { ...oldProfile, credits: userProfile.credits - credits, xp: userProfile.xp + credits / 2 };
+      });
+      queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
+      queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
+      
+      const newUnlocked = { ...unlockedSections, [sectionKey]: true };
+      setUnlockedSections(newUnlocked);
+      
+      if (activeWhatsAppInvestigation?.id) {
+        localStorage.setItem(`whatsapp_unlocked_${activeWhatsAppInvestigation.id}`, JSON.stringify(newUnlocked));
+      }
+      
+      setCreditsSpent(credits);
+      setXpGained(credits / 2);
+      setShowCreditAlert(true);
+      setTimeout(() => setShowCreditAlert(false), 3000);
+      
+      setShowParticles(true);
+      const sectionMessages = {
+        messages: 'Relatório liberado! ✨',
+        photos: 'Pacote de mídias destravado! ✨',
+        quick_fullReport: 'PDF completo reservado! ✨',
+        quick_audioPack: 'Pacote de áudios em preparação! ✨',
+        quick_contactsExport: 'Agenda exportada! ✨',
+        quick_suspiciousCalls: 'Chamadas destacadas foram liberadas! ✨',
+        chat_thread_01: 'Conversa liberada com sucesso! ✨',
+        chat_thread_02: 'Conversa liberada com sucesso! ✨',
+        chat_thread_03: 'Conversa liberada com sucesso! ✨',
+        chat_thread_01_history: 'Estamos puxando mensagens antigas desse contato... ✨',
+        chat_thread_02_history: 'Estamos puxando mensagens antigas desse contato... ✨',
+        chat_thread_03_history: 'Estamos puxando mensagens antigas desse contato... ✨',
+        more_conversations: 'Novas conversas serão carregadas em instantes! ✨'
+      };
+      setToastMessage(sectionMessages[sectionKey] || 'Conteúdo Desbloqueado! ✨');
+      setToastType('success');
+      setShowToast(true);
+      return true;
+    } catch (error) {
+      console.error("Erro ao desbloquear seção:", error);
+      playSound('error');
+      setAlertConfig({
+        title: "Erro ao Desbloquear",
+        message: `Ocorreu um erro ao desbloquear esta seção: ${error.message}`,
+        confirmText: "Ok",
+        onConfirm: () => {
+          playSound('click');
+          setShowAlertModal(false);
+        }
+      });
+      setShowAlertModal(true);
+      return false;
+    }
+  };
+
+  const handleQuickAction = useCallback((action) => {
+    const triggerDownload = () => {
+      setDownloadTask({ key: action.key, label: action.label, startedAt: Date.now() });
+    };
+
+    if (unlockedSections[action.unlockKey]) {
+      triggerDownload();
+      return;
+    }
+
+    playSound('click');
+    setAlertConfig({
+      title: 'Preparar arquivos confidenciais?',
+      message: `Esta ação rápida tem custo de ${action.cost} créditos. ${action.description}\n\nAssim que confirmarmos o pagamento, iniciamos a preparação segura dos arquivos e o download começa automaticamente quando estiver pronto.`,
+      confirmText: 'Preparar arquivos',
+      cancelText: 'Agora não',
+      onConfirm: async () => {
+        playSound('click');
+        setShowAlertModal(false);
+        const success = await handleUnlockSection(action.unlockKey, action.cost);
+        if (success) {
+          triggerDownload();
+        }
+      }
+    });
+    setShowAlertModal(true);
+  }, [handleUnlockSection, unlockedSections]);
+
+  const handleConversationTap = useCallback((thread) => {
+    if (unlockedSections[thread.unlockKey]) {
+      playSound('click');
+      setExpandedChatId((current) => {
+        const next = current === thread.id ? null : thread.id;
+        if (next === null) {
+          setLoadingHistoryFor(null);
+        }
+        return next;
+      });
+      return;
+    }
+
+    playSound('click');
+    setAlertConfig({
+      title: 'Desbloquear conversa confidencial?',
+      message: `Esta conversa detalhada custa ${thread.cost} créditos. O conteúdo inclui mensagens e anexos sensíveis do contato ${thread.contact}.\n\nAo confirmar, os créditos serão debitados e a conversa ficará liberada definitivamente.`,
+      confirmText: 'Desbloquear conversa',
+      cancelText: 'Agora não',
+      onConfirm: async () => {
+        playSound('click');
+        setShowAlertModal(false);
+        const success = await handleUnlockSection(thread.unlockKey, thread.cost);
+        if (success) {
+          setExpandedChatId(thread.id);
+          setLoadingHistoryFor(null);
+        }
+      }
+    });
+    setShowAlertModal(true);
+  }, [handleUnlockSection, unlockedSections]);
+
+  const handleLoadMoreHistory = useCallback((thread) => {
+    const historyKey = `${thread.unlockKey}_history`;
+
+    if (loadingHistoryFor === thread.id || unlockedSections[historyKey]) {
+      setLoadingHistoryFor(thread.id);
+      return;
+    }
+
+    playSound('click');
+    setAlertConfig({
+      title: 'Carregar mais histórico?',
+      message: `Podemos buscar mensagens antigas desse contato por 30 créditos. O processo é sigiloso e pode levar alguns minutos.`,
+      confirmText: 'Buscar histórico',
+      cancelText: 'Cancelar',
+      onConfirm: async () => {
+        playSound('click');
+        setShowAlertModal(false);
+        const success = await handleUnlockSection(historyKey, 30);
+        if (success) {
+          setLoadingHistoryFor(thread.id);
+        }
+      }
+    });
+    setShowAlertModal(true);
+  }, [handleUnlockSection, loadingHistoryFor, unlockedSections]);
+
+  const startInvestigation = useCallback(async (phoneArg) => {
+    playSound('click');
+    const digits = phoneArg
+      ? phoneArg.replace(/\D/g, "")
+      : phoneDigits;
+    const cleanedDigits = digits.startsWith("55") ? digits.slice(2) : digits;
+
+    if (cleanedDigits.length < 10) {
+      playSound('error');
+      setPhoneDigits("");
       setAlertConfig({
         title: "Telefone Inválido",
         message: "Por favor, digite um número de telefone válido com DDD.",
@@ -272,6 +633,8 @@ export default function WhatsAppSpy() {
       setShowAlertModal(true);
       return;
     }
+
+    setPhoneDigits(cleanedDigits);
 
     // ✅ VERIFICAR SE JÁ EXISTE INVESTIGAÇÃO (evitar duplicação)
     if (activeWhatsAppInvestigation) {
@@ -304,20 +667,41 @@ export default function WhatsAppSpy() {
         credits: updatedCredits,
         xp: updatedXp
       });
-      // Invalidate profile query to refetch latest credits/xp
+      queryClient.setQueryData(['userProfile', user?.email], (oldData) => {
+        if (!oldData) return oldData;
+        return oldData.map((profile) =>
+          profile.id === userProfile.id
+            ? { ...profile, credits: updatedCredits, xp: updatedXp }
+            : profile
+        );
+      });
+      queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
+        if (!oldProfile) return oldProfile;
+        return { ...oldProfile, credits: updatedCredits, xp: updatedXp };
+      });
       queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
+      queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
       
-      await base44.entities.Investigation.create({
+      const newInvestigation = await base44.entities.Investigation.create({
         service_name: "WhatsApp",
-        target_username: phone,
+        target_username: `${BRAZIL_PREFIX}${cleanedDigits}`,
         status: "processing",
         progress: 1,
         estimated_days: 7,
         is_accelerated: false,
         created_by: user.email,
       });
+
+      ensureTimer({
+        service: "WhatsApp",
+        id: newInvestigation.id,
+        durationMs: getDurationForInvestigation(newInvestigation),
+        startAt: Date.now(),
+      });
       
       queryClient.invalidateQueries({ queryKey: ['investigations', user?.email] }); // ✅ INVALIDAR PARA ATUALIZAR
+      queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
+      setPhoneDigits(cleanedDigits);
 
       setCreditsSpent(40);
       setXpGained(25);
@@ -329,7 +713,7 @@ export default function WhatsAppSpy() {
       console.error("Erro ao criar investigação:", error);
       playSound('error');
     }
-  }, [phoneNumber, activeWhatsAppInvestigation, userProfile, navigate, refetch, user?.email, queryClient]);
+  }, [phoneDigits, activeWhatsAppInvestigation, userProfile, navigate, refetch, user?.email, queryClient]);
 
   // ✅ AUTO-START - COM PROTEÇÃO CONTRA DUPLICAÇÃO
   useEffect(() => {
@@ -356,10 +740,11 @@ export default function WhatsAppSpy() {
     if (smsInvestigation || callsInvestigation) {
       const phone = smsInvestigation?.target_username || callsInvestigation?.target_username;
       if (phone) {
-        setPhoneNumber(phone);
+        const formatted = `${BRAZIL_PREFIX}${getBrazilDigits(phone)}`;
+        setPhoneDigits(formatted);
         // ✅ SMALL DELAY PARA GARANTIR QUE NÃO DUPLICA
         setTimeout(() => {
-          startInvestigation(phone); // Pass phone directly for auto-start
+          startInvestigation(formatted); // Pass formatted phone for auto-start
         }, 500);
       }
     }
@@ -388,6 +773,7 @@ export default function WhatsAppSpy() {
     }
 
     try {
+      setAccelerating(true);
       const updatedCredits = userProfile.credits - 30;
       const updatedXp = userProfile.xp + 30;
 
@@ -395,26 +781,39 @@ export default function WhatsAppSpy() {
         credits: updatedCredits,
         xp: updatedXp
       });
+      queryClient.setQueryData(['userProfile', user?.email], (oldData) => {
+        if (!oldData) return oldData;
+        return oldData.map((profile) =>
+          profile.id === userProfile.id
+            ? { ...profile, credits: updatedCredits, xp: updatedXp }
+            : profile
+        );
+      });
+      queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
+        if (!oldProfile) return oldProfile;
+        return { ...oldProfile, credits: updatedCredits, xp: updatedXp };
+      });
       queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
+      queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
 
-      // ✅ ACELERA ENTRE 14-20% (ALEATÓRIO)
-      const accelerateAmount = Math.floor(Math.random() * 7) + 14; // 14 a 20
-      const newProgress = Math.min(100, loadingProgress + accelerateAmount);
+      const newProgress = accelerateTimer();
       setLoadingProgress(newProgress);
-      // Update the local storage timestamp so the new progress is the "start" for future calculations
-      localStorage.setItem(`whatsapp_start_${activeWhatsAppInvestigation.id}`, Date.now().toString());
+
+      const newStatus = newProgress >= 100 ? "completed" : "processing";
 
       await base44.entities.Investigation.update(activeWhatsAppInvestigation.id, {
         progress: newProgress,
-        status: newProgress >= 100 ? "completed" : "processing"
+        status: newStatus
       });
       
       queryClient.setQueryData(['investigations', user?.email], (oldData) => {
         if (!oldData) return oldData;
         return oldData.map(inv => 
-          inv.id === activeWhatsAppInvestigation.id ? { ...inv, progress: newProgress } : inv
+          inv.id === activeWhatsAppInvestigation.id ? { ...inv, progress: newProgress, status: newStatus } : inv
         );
       });
+
+      queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
 
       setCreditsSpent(30);
       setXpGained(30);
@@ -423,7 +822,7 @@ export default function WhatsAppSpy() {
       
       // ✅ NÃO MOSTRAR TOAST/PARTÍCULAS SE MOSTRAR ALERT DE CRÉDITOS
       if (newProgress >= 100) {
-        setShowConfetti(true);
+        markCompleted({ service: "WhatsApp", id: activeWhatsAppInvestigation.id });
       }
 
     } catch (error) {
@@ -440,6 +839,7 @@ export default function WhatsAppSpy() {
       });
       setShowAlertModal(true);
     }
+    setAccelerating(false);
   };
 
   const handleCancelInvestigation = async () => {
@@ -454,7 +854,7 @@ export default function WhatsAppSpy() {
     
     try {
       localStorage.removeItem(`whatsapp_unlocked_${activeWhatsAppInvestigation.id}`);
-      localStorage.removeItem(`whatsapp_start_${activeWhatsAppInvestigation.id}`); // Clear local start timestamp too
+      resetTimer({ service: "WhatsApp", id: activeWhatsAppInvestigation.id });
       setUnlockedSections({});
       
       await base44.entities.Investigation.delete(activeWhatsAppInvestigation.id);
@@ -475,68 +875,6 @@ export default function WhatsAppSpy() {
       setAlertConfig({
         title: "Erro ao Deletar",
         message: `Ocorreu um erro ao tentar deletar a investigação: ${error.message}`,
-        confirmText: "Ok",
-        onConfirm: () => {
-          playSound('click');
-          setShowAlertModal(false);
-        }
-      });
-      setShowAlertModal(true);
-    }
-  };
-
-  const handleUnlockSection = async (sectionKey, credits) => {
-    playSound('click');
-    
-    if (!userProfile || userProfile.credits < credits) {
-      playSound('error');
-      setShakeScreen(prev => prev + 1);
-      setAlertConfig({
-        title: "Créditos Insuficientes",
-        message: `Você precisa de ${credits} créditos para desbloquear este conteúdo.`,
-        confirmText: "Comprar Créditos",
-        onConfirm: () => {
-          playSound('click');
-          setShowAlertModal(false);
-          navigate(createPageUrl("BuyCredits"));
-        },
-        cancelText: "Voltar"
-      });
-      setShowAlertModal(true);
-      return;
-    }
-
-    try {
-      
-      await base44.entities.UserProfile.update(userProfile.id, {
-        credits: userProfile.credits - credits,
-        xp: userProfile.xp + (credits / 2) // Half credits as XP
-      });
-      
-      queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
-      
-      const newUnlocked = { ...unlockedSections, [sectionKey]: true };
-      setUnlockedSections(newUnlocked);
-      
-      if (activeWhatsAppInvestigation?.id) {
-        localStorage.setItem(`whatsapp_unlocked_${activeWhatsAppInvestigation.id}`, JSON.stringify(newUnlocked));
-      }
-      
-      setCreditsSpent(credits);
-      setXpGained(credits / 2);
-      setShowCreditAlert(true);
-      setTimeout(() => setShowCreditAlert(false), 3000);
-      
-      setShowParticles(true);
-      setToastMessage('Conteúdo Desbloqueado! ✨');
-      setToastType('success');
-      setShowToast(true);
-    } catch (error) {
-      console.error("Erro ao desbloquear seção:", error);
-      playSound('error');
-      setAlertConfig({
-        title: "Erro ao Desbloquear",
-        message: "Ocorreu um erro ao tentar desbloquear o conteúdo. Por favor, tente novamente.",
         confirmText: "Ok",
         onConfirm: () => {
           playSound('click');
@@ -589,83 +927,87 @@ export default function WhatsAppSpy() {
         <Particles show={showParticles} />
         
         <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-          <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-            <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-              <Button variant="ghost" onClick={() => { playSound('click'); navigate(createPageUrl("Dashboard")); }} className="h-9 px-3 hover:bg-gray-100" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                Voltar
-              </Button>
-              <h1 className="text-base font-bold text-gray-900">WhatsApp Spy</h1>
-              {userProfile && (
-                <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                  <Zap className="w-3 h-3 text-orange-500" />
-                  <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
           <div className="w-full max-w-2xl mx-auto p-3">
-            <Card className="bg-white border-0 shadow-lg p-6">
-              <div className="text-center mb-6">
-                <div className="w-16 h-16 rounded-2xl bg-green-100 flex items-center justify-center mx-auto mb-4 shadow-sm">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-400 to-green-500 flex items-center justify-center">
-                    <WhatsAppIcon className="w-6 h-6" color="white" />
+            <Card className="relative overflow-hidden border border-[#CDEFD9] shadow-lg">
+              <div className="absolute -top-16 -right-20 w-48 h-48 rounded-full bg-[#E9FBF0] opacity-70" aria-hidden="true" />
+              <div className="absolute -bottom-14 -left-14 w-40 h-40 rounded-full bg-[#F4FFF9] opacity-80" aria-hidden="true" />
+              <div className="relative p-6 space-y-6">
+                <div className="flex items-center gap-3">
+                  <WhatsAppIcon size={60} />
+                  <div>
+                    <h2 className="text-[16px] font-bold text-gray-700">Espionagem Completa  </h2>
+                    <p className="text-xs text-gray-500">Monitore conversas, mídias e ligações com atualização constante.</p>
                   </div>
                 </div>
-              </div>
 
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-base font-semibold text-gray-700 mb-2">
-                    Digite o número de telefone
+                <div className="bg-[#F3FFF8] border border-[#C7F0D8] rounded-xl p-3 text-xs text-[#1C512F]">
+                  <span className="font-semibold text-[#1DA955]">Dica:</span> Digite o número com o DDD. Exemplo: <strong>(11) 98765-4321</strong>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-gray-700" htmlFor="phoneNumber">
+                    Número de telefone alvo
                   </label>
-                  <input
-                    type="tel"
-                    placeholder="(11) 99999-9999"
-                    value={phoneNumber}
-                    onChange={(e) => {
-                      const value = e.target.value.replace(/\D/g, '');
-                      if (value.length <= 11) {
-                        let formatted = value;
-                        if (value.length > 2) {
-                          formatted = `(${value.slice(0, 2)}) ${value.slice(2)}`;
+                  <div className="flex items-center bg-white border-2 border-[#BEEFD2] focus-within:border-[#1DA955] rounded-xl px-3 py-2 transition-colors gap-2">
+                    <span className="text-sm font-semibold text-gray-600 select-none">+55</span>
+                    <input
+                      id="phoneNumber"
+                      type="tel"
+                      placeholder="11987654321"
+                      value={phoneDigits}
+                      onChange={(e) => {
+                        const digitsOnly = e.target.value.replace(/\D/g, "");
+                        if (digitsOnly.length > 11) return;
+                        setPhoneDigits(digitsOnly);
+                      }}
+                      onBlur={() => {
+                        if (!phoneDigits) {
+                          setPhoneDigits("");
                         }
-                        if (value.length > 7) {
-                          formatted = `(${value.slice(0, 2)}) ${value.slice(2, 7)}-${value.slice(7)}`;
-                        }
-                        setPhoneNumber(formatted);
-                      }
-                    }}
-                    onKeyPress={(e) => e.key === 'Enter' && startInvestigation()}
-                    className="w-full h-12 px-4 text-base border-2 border-green-200 focus:border-green-400 focus:ring-green-400 rounded-xl"
-                  />
+                      }}
+                      onKeyPress={(e) => e.key === 'Enter' && startInvestigation(phoneDigits)}
+                      className="flex-1 border-none bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-sm h-9 outline-none"
+                      style={{ border: 'none', boxShadow: 'none' }}
+                      maxLength={11}
+                      autoComplete="off"
+                    />
+                  </div>
                 </div>
 
                 <Button
-                  onClick={() => startInvestigation()}
-                  disabled={!phoneNumber || phoneNumber.replace(/\D/g, '').length < 10}
-                  className="w-full h-12 bg-gradient-to-r from-green-400 to-green-500 hover:from-green-500 hover:to-green-600 text-white font-bold text-base rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => startInvestigation(phoneDigits)}
+                  disabled={phoneDigits.length < 10}
+                  className="w-full h-12 bg-gradient-to-r from-[#1DA955] to-[#21C269] hover:from-[#189349] hover:to-[#1BBF61] text-white font-bold text-base rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Iniciar Investigação - 45 créditos
+                  Iniciar Investigação
                 </Button>
 
-                <div className="text-center text-xs text-gray-500">
-                  <p>Tempo estimado: 7 dias</p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div className="bg-[#F6FFF9] border border-[#D5F5E1] rounded-lg p-3">
+                    <p className="text-[11px] text-gray-500 uppercase font-semibold mb-1">Conversas</p>
+                    <p className="text-xs text-gray-700">Histórico completo, inclusive mensagens apagadas.</p>
+                  </div>
+                  <div className="bg-[#F6FFF9] border border-[#D5F5E1] rounded-lg p-3">
+                    <p className="text-[11px] text-gray-500 uppercase font-semibold mb-1">Mídias</p>
+                    <p className="text-xs text-gray-700">Fotos, vídeos, áudios e documentos compartilhados.</p>
+                  </div>
+                  <div className="bg-[#F6FFF9] border border-[#D5F5E1] rounded-lg p-3">
+                    <p className="text-[11px] text-gray-500 uppercase font-semibold mb-1">Chamadas</p>
+                    <p className="text-xs text-gray-700">Ligações de voz e vídeo com horário e duração.</p>
+                  </div>
                 </div>
               </div>
             </Card>
           </div>
 
-          <ConfirmModal
+          <WhatsAppCardModal
             isOpen={showAlertModal}
-            onConfirm={alertConfig.onConfirm || (() => { playSound('click'); setShowAlertModal(false); })}
-            onCancel={() => { playSound('click'); setShowAlertModal(false); }}
             title={alertConfig.title}
             message={alertConfig.message}
-            confirmText={alertConfig.confirmText}
+            confirmText={alertConfig.confirmText || "Ok"}
             cancelText={alertConfig.cancelText || "Voltar"}
-            type="default"
+            onConfirm={alertConfig.onConfirm || (() => { playSound('click'); setShowAlertModal(false); })}
+            onCancel={() => { playSound('click'); setShowAlertModal(false); }}
           />
         </div>
       </>
@@ -678,34 +1020,15 @@ export default function WhatsAppSpy() {
     
     return (
       <>
-        <Confetti show={showConfetti} onComplete={() => setShowConfetti(false)} />
         <ScreenShake trigger={shakeScreen} />
         <Toast show={showToast} message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />
         <Particles show={showParticles} />
         
         <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-          <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-            <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-              <Button variant="ghost" onClick={() => { playSound('click'); navigate(createPageUrl("Dashboard")); }} className="h-9 px-3 hover:bg-gray-100" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                Voltar
-              </Button>
-              <h1 className="text-base font-bold text-gray-900">WhatsApp Spy</h1>
-              {userProfile && (
-                <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                  <Zap className="w-3 h-3 text-orange-500" />
-                  <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
           <div className="w-full max-w-2xl mx-auto p-3">
             <Card className="bg-white border-0 shadow-lg p-4 mb-3">
               <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-400 to-green-500 flex items-center justify-center">
-                  <WhatsAppIcon className="w-6 h-6" color="white" />
-                </div>
+                <WhatsAppIcon size={44} />
                 <div className="flex-1 min-w-0">
                   <h3 className="font-bold text-gray-900">Investigando WhatsApp</h3>
                   <p className="text-xs text-gray-600">Acessando conversas...</p>
@@ -749,12 +1072,15 @@ export default function WhatsAppSpy() {
                   </div>
                 ))}
 
+                {loadingProgress < 100 && (
                 <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded mt-3">
                   <p className="text-xs text-blue-900">
                     <span className="font-bold">⏳ Investigação em andamento</span><br/>
-                    Tempo estimado: 7 dias
+                    Monitoramento ativo, com extração contínua e validações manuais.<br/>
+                    Tempo estimado: {remainingDays} {remainingDays === '1' ? 'dia' : 'dias'}
                   </p>
                 </div>
+                )}
               </div>
 
               <div className="mt-4 space-y-2">
@@ -806,15 +1132,14 @@ export default function WhatsAppSpy() {
             type="danger"
           />
 
-          <ConfirmModal
+          <WhatsAppCardModal
             isOpen={showAlertModal}
-            onConfirm={alertConfig.onConfirm || (() => { playSound('click'); setShowAlertModal(false); })}
-            onCancel={() => { playSound('click'); setShowAlertModal(false); }}
             title={alertConfig.title}
             message={alertConfig.message}
-            confirmText={alertConfig.confirmText}
+            confirmText={alertConfig.confirmText || "Ok"}
             cancelText={alertConfig.cancelText || "Voltar"}
-            type="default"
+            onConfirm={alertConfig.onConfirm || (() => { playSound('click'); setShowAlertModal(false); })}
+            onCancel={() => { playSound('click'); setShowAlertModal(false); }}
           />
         </div>
       </>
@@ -825,117 +1150,218 @@ export default function WhatsAppSpy() {
   if (activeWhatsAppInvestigation && loadingProgress >= 100) {
     return (
       <>
-        <Confetti show={showConfetti} onComplete={() => setShowConfetti(false)} />
         <ScreenShake trigger={shakeScreen} />
         <Toast show={showToast} message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />
         <Particles show={showParticles} />
         
         <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-          <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-            <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-              <Button variant="ghost" onClick={() => { playSound('click'); navigate(createPageUrl("Dashboard")); }} className="h-9 px-3 hover:bg-gray-100" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                Voltar
-              </Button>
-              <h1 className="text-base font-bold text-gray-900">WhatsApp Spy</h1>
+          <div className="w-full max-w-3xl mx-auto p-3 space-y-4">
+            <Card className="bg-white border border-emerald-100 shadow-md rounded-2xl p-5">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                <div>
+                  <span className="text-[11px] uppercase tracking-[0.22em] text-emerald-600 font-semibold">WhatsApp concluído</span>
+                  <h2 className="mt-2 text-xl font-extrabold text-gray-900">Varredura finalizada com evidências classificadas</h2>
+                  <p className="mt-2 text-sm text-gray-600 leading-relaxed">
+                    Organizamos todas as conversas, anexos e chamadas com foco no que realmente importa. Abaixo estão os pontos que sugerimos acompanhar com atenção.
+                  </p>
+                </div>
               {userProfile && (
-                <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                  <Zap className="w-3 h-3 text-orange-500" />
-                  <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
+                  <div className="sm:self-start">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 border border-emerald-100 px-3 py-1 text-[11px] font-semibold text-emerald-700">
+                      <Zap className="w-3 h-3" /> Saldo atual: {userProfile.credits} créditos
+                    </span>
                 </div>
               )}
-            </div>
           </div>
 
-          <div className="w-full max-w-3xl mx-auto p-3">
-            <div className="bg-gradient-to-r from-green-400 to-green-500 border border-green-200 rounded-xl p-4 mb-3 text-white">
-              <div className="flex items-center gap-2 mb-2">
-                <CheckCircle2 className="w-5 h-5" />
-                <p className="font-bold text-sm">Investigação Completa!</p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3">
+                  <p className="text-[10px] font-semibold text-emerald-700 uppercase tracking-wide">Conversas críticas</p>
+                  <p className="text-lg font-bold text-emerald-900 mt-1">3 conversas</p>
+                </div>
+                <div className="rounded-xl bg-orange-50 border border-orange-100 p-3">
+                  <p className="text-[10px] font-semibold text-orange-600 uppercase tracking-wide">Chamadas fora de horário</p>
+                  <p className="text-lg font-bold text-orange-700 mt-1">7 registros</p>
+                  </div>
+                <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
+                  <p className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">Áudios aguardando análise</p>
+                  <p className="text-lg font-bold text-slate-900 mt-1">18 arquivos</p>
+                  </div>
+                  </div>
+
+              <div className="mt-4 space-y-2 text-sm text-gray-700">
+                {conversationInsights.map((insight) => (
+                  <div key={insight.id} className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <p className="text-[13px] font-semibold text-gray-900">{insight.contact}</p>
+                        <p className="text-[12px] text-gray-600 leading-snug mt-1">{insight.summary}</p>
+                </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <Badge className={`text-[10px] font-semibold ${insight.badgeClass}`}>{insight.label}</Badge>
+                        <span className="text-[11px] text-gray-500 whitespace-nowrap">{formatRelativeTimestamp(insight.minutesAgo)}</span>
               </div>
-              <p className="text-xs opacity-90">Dados do WhatsApp coletados com sucesso</p>
+                    </div>
+                  </div>
+                ))}
             </div>
 
-            <Card className="bg-white border-0 shadow-lg p-4 mb-3">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-bold text-gray-900">📱 Conversas Recentes</h3>
-                {!unlockedSections.messages && (
-                  <Button
-                    onClick={() => handleUnlockSection('messages', 40)}
-                    size="sm"
-                    className="h-8 bg-gradient-to-r from-green-400 to-green-500 hover:from-green-500 hover:to-green-600 text-white text-xs"
-                  >
-                    <Lock className="w-3 h-3 mr-1" />
-                    Desbloquear - 40 créditos
-                  </Button>
-                )}
-              </div>
-              
-              {unlockedSections.messages ? (
-                <div className="space-y-2">
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <p className="text-sm font-bold text-gray-900 mb-1">Maria Silva</p>
-                    <p className="text-xs text-gray-600">Tá livre hoje à noite? 👀</p>
-                    <p className="text-[10px] text-gray-400 mt-1">Hoje às 14:32</p>
+              <div className="mt-4 border-l-2 border-orange-300 bg-orange-50/60 px-3 py-2 rounded-r-xl">
+                <p className="text-[11px] text-orange-700 font-semibold">
+                  Aviso de cobrança: a liberação completa das conversas e das ações rápidas envolve processamento manual e consome créditos adicionais.
+                </p>
                   </div>
-                  
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <p className="text-sm font-bold text-gray-900 mb-1">João Santos</p>
-                    <p className="text-xs text-gray-600">Vamos marcar aquele lance... 🤝</p>
-                    <p className="text-[10px] text-gray-400 mt-1">Ontem às 22:15</p>
-                  </div>
-                  
-                  <div className="bg-gray-50 rounded-lg p-3">
-                    <p className="text-sm font-bold text-gray-900 mb-1">Ana Costa</p>
-                    <p className="text-xs text-gray-600">Oi amor, me liga quando puder 💕</p>
-                    <p className="text-[10px] text-gray-400 mt-1">2 dias atrás</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="bg-gray-100 rounded-lg p-4 text-center">
-                  <Lock className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                  <p className="text-xs text-gray-600">Conteúdo bloqueado</p>
-                </div>
-              )}
             </Card>
 
-            <Card className="bg-white border-0 shadow-lg p-4 mb-3">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-bold text-gray-900">📸 Fotos Enviadas</h3>
-                {!unlockedSections.photos && (
-                  <Button
-                    onClick={() => handleUnlockSection('photos', 35)}
-                    size="sm"
-                    className="h-8 bg-gradient-to-r from-green-400 to-green-500 hover:from-green-500 hover:to-green-600 text-white text-xs"
-                  >
-                    <Lock className="w-3 h-3 mr-1" />
-                    Desbloquear - 35 créditos
-                  </Button>
-                )}
-              </div>
-              
-              {unlockedSections.photos ? (
-                <div className="grid grid-cols-3 gap-2">
-                  {[1,2,3,4,5,6].map((i) => (
-                    <div key={i} className="aspect-square bg-gray-200 rounded-lg relative overflow-hidden">
-                      <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-xs">
-                        Foto {i}
-                      </div>
+            <Card className="bg-white border-0 shadow-lg p-5">
+                  <h3 className="font-bold text-gray-900 text-sm mb-3">📱 Conversas suspeitas monitoradas</h3>
+                    <div className="space-y-3">
+                {conversationThreads.map((thread) => {
+                  const unlocked = !!unlockedSections[thread.unlockKey];
+                  const expanded = unlocked && expandedChatId === thread.id;
+                  const historyKey = `${thread.unlockKey}_history`;
+                  const historyRequested = loadingHistoryFor === thread.id || !!unlockedSections[historyKey];
+                  const lastMessage = thread.messages[thread.messages.length - 1].text;
+                  return (
+                    <div
+                      key={thread.id}
+                      className={`rounded-2xl border ${unlocked ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-gray-50'} p-3`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleConversationTap(thread)}
+                        className="w-full text-left"
+                      >
+                          <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-[13px] font-semibold text-gray-900">{thread.contact}</p>
+                            <p className="text-[11px] text-gray-500">Atualizado {formatRelativeTimestamp(thread.lastActivityMinutes)}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge className={`text-[10px] ${unlocked ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-600'}`}>
+                              {unlocked ? 'Liberado' : `Desbloquear - ${thread.cost} créditos`}
+                            </Badge>
+                            <span className="text-gray-400 text-lg">›</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-2">
+                          {unlocked ? (
+                            expanded ? (
+                              <>
+                                <div className="space-y-2">
+                                  {thread.messages.map((message, idx) => (
+                                    <div key={idx} className={`flex ${message.from === 'target' ? 'justify-end' : 'justify-start'}`}>
+                                      <span className={`${message.from === 'target' ? 'bg-emerald-600 text-white rounded-t-2xl rounded-bl-2xl' : 'bg-white text-gray-800 border border-emerald-100 rounded-t-2xl rounded-br-2xl'} px-3 py-2 text-[13px] leading-snug max-w-[80%] shadow-sm`}>
+                                        {message.text}
+                                      </span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                                <div className="mt-3">
+                                  {historyRequested ? (
+                                    <div className="flex items-center gap-2 text-[11px] text-emerald-600">
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                      Processando histórico adicional...
+                    </div>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      className="h-8 px-3 text-[11px] border border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleLoadMoreHistory(thread);
+                                      }}
+                                    >
+                                      Carregar mais histórico - 30 créditos
+                                    </Button>
+                  )}
                 </div>
-              ) : (
-                <div className="bg-gray-100 rounded-lg p-4 text-center">
-                  <Lock className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                  <p className="text-xs text-gray-600">Conteúdo bloqueado</p>
+                              </>
+                            ) : (
+                              <p className="text-[12px] text-emerald-700 font-medium">Toque para abrir a conversa completa.</p>
+                            )
+                          ) : (
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-[12px] text-gray-600 italic max-w-[70%]">{lastMessage}</p>
+                      <Button
+                        size="sm"
+                                className="h-8 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white text-xs"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleConversationTap(thread);
+                                }}
+                              >
+                                Ver conversa - {thread.cost} créditos
+                      </Button>
+                            </div>
+                    )}
+                  </div>
+                      </button>
+                        </div>
+                  );
+                })}
+                    </div>
+
+              <div className="mt-4">
+                {unlockedSections.more_conversations ? (
+                  <div className="rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 px-3 py-3 text-[12px] text-emerald-700">
+                    Processando novas conversas confidenciais... volte em alguns minutos para atualizar.
+                    </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    className="w-full h-10 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold"
+                    onClick={() => handleUnlockSection('more_conversations', 35)}
+                  >
+                    Carregar mais conversas - 35 créditos
+                  </Button>
+                  )}
                 </div>
-              )}
-            </Card>
+              </Card>
+
+              <Card className="bg-white border-0 shadow-lg p-5">
+                <h3 className="font-bold text-gray-900 text-sm mb-2">⚡ Ações Rápidas</h3>
+              <p className="text-[11px] text-gray-600 mb-3">
+                Cada ação gera um pacote dedicado e consome créditos para cobrir a extração manual. Assim que confirmamos o pagamento, iniciamos a preparação segura e o download dispara automaticamente quando o arquivo estiver pronto.
+              </p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                {quickActions.map((action) => {
+                  const isUnlocked = !!unlockedSections[action.unlockKey];
+                  const isActive = downloadTask?.key === action.key;
+                  const costLabel = isUnlocked ? 'Adquirido' : `${action.cost} créditos`;
+                  const costClass = isUnlocked ? 'text-emerald-600' : 'text-gray-500';
+                  const statusNote = isUnlocked ? 'Cobrança confirmada. Pode gerar um novo pacote quando quiser.' : 'Cobrança única e sigilosa.';
+                  return (
+                    <button
+                      key={action.key}
+                      onClick={() => handleQuickAction(action)}
+                      className={`rounded-xl border px-3 py-3 text-left transition ${isUnlocked ? 'border-emerald-200 bg-emerald-50 hover:bg-emerald-100' : 'border-gray-200 bg-gray-50 hover:bg-gray-100'}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-lg" aria-hidden>{action.icon}</span>
+                        <span className={`text-[11px] font-semibold ${costClass}`}>{costLabel}</span>
+                      </div>
+                      <p className="text-[13px] font-semibold text-gray-800 mt-1 leading-snug">{action.label}</p>
+                      <p className="text-[11px] text-gray-500 mt-1 leading-snug">
+                        {action.description}
+                      </p>
+                      <p className={`text-[10px] font-semibold mt-2 ${isUnlocked ? 'text-emerald-600' : 'text-orange-500'}`}>
+                        {statusNote}
+                      </p>
+                      {isActive && (
+                        <p className="text-[10px] text-emerald-600 mt-1">Preparando agora mesmo...</p>
+                      )}
+                    </button>
+                  );
+                })}
+                </div>
+              </Card>
 
             <Button
               onClick={handleCancelInvestigation}
               variant="outline"
-              className="w-full h-10 border border-red-200 text-red-600 hover:bg-red-50 font-medium text-sm rounded-xl mb-4"
+              className="w-full h-11 border border-red-200 text-red-600 hover:bg-red-50 font-medium text-sm rounded-2xl"
             >
               <Trash2 className="w-4 h-4 mr-2" />
               Apagar investigação
@@ -968,17 +1394,29 @@ export default function WhatsAppSpy() {
             type="danger"
           />
 
-          <ConfirmModal
+          <WhatsAppCardModal
             isOpen={showAlertModal}
-            onConfirm={alertConfig.onConfirm || (() => { playSound('click'); setShowAlertModal(false); })}
-            onCancel={() => { playSound('click'); setShowAlertModal(false); }}
             title={alertConfig.title}
             message={alertConfig.message}
-            confirmText={alertConfig.confirmText}
+            confirmText={alertConfig.confirmText || "Ok"}
             cancelText={alertConfig.cancelText || "Voltar"}
-            type="default"
+            onConfirm={alertConfig.onConfirm || (() => { playSound('click'); setShowAlertModal(false); })}
+            onCancel={() => { playSound('click'); setShowAlertModal(false); }}
           />
         </div>
+
+        {downloadTask && (
+          <div className="fixed bottom-5 right-5 left-5 sm:left-auto sm:w-80 z-[90]">
+            <div className="bg-white border border-emerald-200 shadow-xl rounded-2xl px-4 py-3 flex items-center gap-3 animate-in slide-in-from-bottom-4">
+              <Loader2 className="w-4 h-4 text-emerald-600 animate-spin" />
+              <div className="flex-1">
+                <p className="text-xs font-semibold text-gray-800">Preparando {downloadTask.label}</p>
+                <p className="text-[11px] text-gray-500 leading-snug">Arquivos sigilosos em processamento...</p>
+                <p className="text-[10px] text-emerald-600 mt-0.5">Assim que finalizar, o download inicia automaticamente.</p>
+              </div>
+            </div>
+          </div>
+        )}
       </>
     );
   }

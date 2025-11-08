@@ -3,6 +3,7 @@ import Pages from "@/pages/index.jsx"
 import { Toaster } from "@/components/ui/toaster"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import ErrorBoundary from "@/components/ErrorBoundary"
+import GlobalInvestigationWatcher from "@/components/investigation/GlobalInvestigationWatcher.jsx"
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,6 +19,7 @@ function App() {
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <Pages />
+        <GlobalInvestigationWatcher />
         <Toaster />
       </QueryClientProvider>
     </ErrorBoundary>

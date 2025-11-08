@@ -7,22 +7,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Instagram, Search, CheckCircle2, Loader2, AtSign, Zap } from "lucide-react";
+import { ArrowLeft, Search, CheckCircle2, Loader2, Zap } from "lucide-react";
+import InstagramAppIcon from "@/components/icons/InstagramAppIcon";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
+import { useInvestigationTimer } from "@/hooks/useInvestigationTimer";
+import { markCompleted } from "@/lib/progressManager";
 
 export default function InstagramSpy() {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [accelerating, setAccelerating] = useState(false);
-  const [showAccelerateButton, setShowAccelerateButton] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [confirmModalConfig, setConfirmModalConfig] = useState({});
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [alertMessage, setAlertMessage] = useState("");
   const [usernameError, setUsernameError] = useState("");
   const [displayedProgress, setDisplayedProgress] = useState(0); // New state for reactive UI progress
+  const completionHandledRef = useRef(false);
   const queryClient = useQueryClient();
 
   // ✅ ÚNICA CHAMADA DE USER - COM CACHE
@@ -149,114 +152,42 @@ export default function InstagramSpy() {
     }
   }, [completedInstagramInvestigation?.id, navigate]);
 
-  // Initialize displayedProgress when an active investigation is found or changes
+  const {
+    progress: timerProgress,
+    canAccelerate,
+    accelerate: accelerateTimer,
+  } = useInvestigationTimer({ service: "Instagram", investigation: activeInstagramInvestigation });
+
   useEffect(() => {
     if (activeInstagramInvestigation) {
-      setDisplayedProgress(activeInstagramInvestigation.progress);
+      const safeProgress = timerProgress > 0 ? timerProgress : 1;
+      setDisplayedProgress(Math.min(100, safeProgress));
     } else {
-      setDisplayedProgress(0); // Reset if no active investigation
+      setDisplayedProgress(0);
     }
-  }, [activeInstagramInvestigation]);
+  }, [timerProgress, activeInstagramInvestigation?.id]);
 
+  const showAccelerateButton = canAccelerate && !accelerating;
 
-  // ✅ PROGRESSO COM TIMESTAMP - SEM ATUALIZAR CACHE A CADA SEGUNDO
-  useEffect(() => {
-    if (!activeInstagramInvestigation || activeInstagramInvestigation.status === "completed" || activeInstagramInvestigation.status === "accelerated") {
-      return;
-    }
-    
-    const investigationId = activeInstagramInvestigation.id;
-    const startTimeKey = `instagram_start_${investigationId}`;
-    
-    if (!localStorage.getItem(startTimeKey)) {
-      localStorage.setItem(startTimeKey, Date.now().toString());
-    }
-
-    const startTime = parseInt(localStorage.getItem(startTimeKey));
-    let lastSavedProgress = activeInstagramInvestigation.progress;
-    
-    const updateProgress = async () => {
-      const elapsed = Date.now() - startTime;
-      let calculatedProgress = 1;
-      
-      if (elapsed < 10000) {
-        calculatedProgress = Math.min(5, 1 + Math.floor((elapsed / 10000) * 4));
-      }
-      else if (elapsed < 70000) {
-        calculatedProgress = Math.min(10, 5 + Math.floor(((elapsed - 10000) / 60000) * 5));
-      }
-      else {
-        const remainingTime = elapsed - 70000;
-        calculatedProgress = Math.min(100, 10 + Math.floor((remainingTime / 3600000) * 90));
-      }
-      
-      calculatedProgress = Math.max(calculatedProgress, activeInstagramInvestigation.progress);
-      
-      // ✅ ATUALIZAR APENAS ESTADO LOCAL (UI)
-      setDisplayedProgress(calculatedProgress);
-      
-      // Salvar no banco a cada 10% de mudança
-      if (Math.floor(calculatedProgress / 10) > Math.floor(lastSavedProgress / 10) || calculatedProgress === 100) {
-        lastSavedProgress = calculatedProgress;
-        try {
-          await base44.entities.Investigation.update(investigationId, {
-            progress: calculatedProgress,
-            ...(calculatedProgress >= 100 && { status: "completed" })
-          });
-          // ✅ ATUALIZAR CACHE APENAS QUANDO SALVAR NO BANCO
-          queryClient.setQueryData(['investigations', user?.email], (oldData) => {
-            if (!oldData) return oldData;
-            return oldData.map(inv => 
-              inv.id === investigationId 
-                ? { ...inv, progress: calculatedProgress, ...(calculatedProgress >= 100 && { status: "completed" }) }
-                : inv
-            );
-          });
-          if (calculatedProgress >= 100) {
-            playSound('complete');
-            localStorage.removeItem(startTimeKey);
-            localStorage.removeItem(`accelerate_shown_${investigationId}`);
-          }
-        } catch (error) {
-          console.error("Erro ao salvar progresso:", error);
-        }
-      }
-    };
-
-    updateProgress();
-    const timer = setInterval(updateProgress, 1000);
-    
-    return () => clearInterval(timer);
-  }, [activeInstagramInvestigation?.id, activeInstagramInvestigation?.status, activeInstagramInvestigation?.progress, playSound, queryClient, user?.email]);
-
-  // Mostrar botão de acelerar: delay de 5s APENAS na primeira vez (persiste no localStorage)
   useEffect(() => {
     if (!activeInstagramInvestigation) {
-      setShowAccelerateButton(false);
+      completionHandledRef.current = false;
       return;
     }
-    // Use displayedProgress here to check if it's less than 100,
-    // as displayedProgress is the source of truth for UI progress now.
-    if (displayedProgress < 1 || displayedProgress >= 100) {
-      setShowAccelerateButton(false);
-      return;
+
+    if (timerProgress >= 99 && !completionHandledRef.current) {
+      completionHandledRef.current = true;
+      (async () => {
+        await base44.entities.Investigation.update(activeInstagramInvestigation.id, {
+          progress: 100,
+          status: "completed",
+        });
+        markCompleted({ service: "Instagram", id: activeInstagramInvestigation.id });
+        playSound('complete');
+        await refetch();
+      })();
     }
-    
-    const storageKey = `accelerate_shown_${activeInstagramInvestigation.id}`;
-    const alreadyShown = localStorage.getItem(storageKey) === 'true';
-    
-    if (alreadyShown) {
-      setShowAccelerateButton(true);
-    } else {
-      setShowAccelerateButton(false);
-      const timer = setTimeout(() => {
-        setShowAccelerateButton(true);
-        localStorage.setItem(storageKey, 'true');
-      }, 5000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [activeInstagramInvestigation?.id, displayedProgress]); // Use displayedProgress as dependency for UI logic
+  }, [timerProgress, activeInstagramInvestigation?.id, refetch]);
 
   const handleCancelInvestigation = async () => {
     playSound('trash');
@@ -264,7 +195,7 @@ export default function InstagramSpy() {
     
     setConfirmModalConfig({
       title: "Cancelar Investigação?",
-      message: "⚠️ Você perderá o progresso atual.\n\nℹ️ O Instagram é grátis, então não há reembolso de créditos.",
+      message: "⚠️ Você perderá o progresso atual.",
       confirmText: "Sim, cancelar",
       cancelText: "Voltar",
       type: "danger",
@@ -283,9 +214,9 @@ export default function InstagramSpy() {
   };
 
   const handleAccelerate = async () => {
-    if (!activeInstagramInvestigation || !userProfile || userProfile.credits < 20) {
+    if (!activeInstagramInvestigation || !userProfile || userProfile.credits < 30) {
       playSound('error');
-      setAlertMessage("Créditos insuficientes! Você precisa de 20 créditos para acelerar.");
+      setAlertMessage("Créditos insuficientes! Você precisa de 30 créditos para acelerar.");
       setShowAlertModal(true);
       return;
     }
@@ -294,72 +225,37 @@ export default function InstagramSpy() {
     playSound('accelerate');
 
     setAccelerating(true);
-    setShowAccelerateButton(false);
 
-    const updatedCredits = userProfile.credits - 20;
-    const updatedXp = userProfile.xp + 20;
+    const updatedCredits = userProfile.credits - 30;
+    const updatedXp = userProfile.xp + 25;
 
     await base44.entities.UserProfile.update(userProfile.id, {
       credits: updatedCredits,
       xp: updatedXp
     });
-    // Invalidate and refetch user profile to update credits display immediately
+    // Invalidate and refetch user profile to update credits display imediatamente
     queryClient.invalidateQueries(['userProfile', user?.email]);
 
-    const boost = 17; // Sempre aumenta 17%
-    // Use displayedProgress as the base for acceleration
-    const newProgressAfterAccelerate = Math.min(100, displayedProgress + boost);
+    const boost = Math.floor(Math.random() * 6) + 15; // 15% - 20%
+    const newProgressAfterAccelerate = accelerateTimer(boost);
 
-    // Update displayed state immediately
-    setDisplayedProgress(newProgressAfterAccelerate); 
-
-    // If acceleration completes the investigation, update DB as well
-    if (newProgressAfterAccelerate >= 100) {
+    if (newProgressAfterAccelerate >= 99) {
       await base44.entities.Investigation.update(activeInstagramInvestigation.id, {
         progress: 100, // Explicitly 100
         status: "completed"
       });
+      markCompleted({ service: "Instagram", id: activeInstagramInvestigation.id });
       playSound('complete'); // Play completion sound if accelerated to 100
-      
-      const localStorageStartTimeKey = `instagram_start_${activeInstagramInvestigation.id}`;
-      localStorage.removeItem(localStorageStartTimeKey); // Clean up start time
-      localStorage.removeItem(`accelerate_shown_${activeInstagramInvestigation.id}`); // Clean up accelerate flag
-
-      await refetch(); // Refetch to update activeInstagramInvestigation from DB
+      completionHandledRef.current = true;
+      await refetch();
     } else {
-      // If not completed, reset the startTime in localStorage to reflect accelerated progress
-      // This ensures subsequent time-based calculations start from the accelerated point,
-      // rather than continuing from the original start.
-      const localStorageStartTimeKey = `instagram_start_${activeInstagramInvestigation.id}`;
-      // Recalculate startTime based on newProgressAfterAccelerate to correctly reset elapsed time.
-      let newStartTime = Date.now();
-      if (newProgressAfterAccelerate <= 5) {
-        // (newProgressAfterAccelerate - 1) because progress starts at 1
-        newStartTime = Date.now() - ((newProgressAfterAccelerate - 1) / 4) * 10000;
-      } else if (newProgressAfterAccelerate <= 10) {
-        // 10000ms for first 5%, then (newProgressAfterAccelerate - 5) for next 5% over 60000ms
-        newStartTime = Date.now() - (10000 + ((newProgressAfterAccelerate - 5) / 5) * 60000);
-      } else { // newProgressAfterAccelerate > 10
-        // 70000ms for first 10%, then (newProgressAfterAccelerate - 10) for next 90% over 3600000ms
-        newStartTime = Date.now() - (70000 + ((newProgressAfterAccelerate - 10) / 90) * 3600000);
-      }
-      localStorage.setItem(localStorageStartTimeKey, newStartTime.toString());
-
-      // Update DB with the accelerated progress
       await base44.entities.Investigation.update(activeInstagramInvestigation.id, {
         progress: newProgressAfterAccelerate
       });
-      refetch(); // Refetch to ensure activeInstagramInvestigation reflects updated progress in DB
+      refetch();
     }
 
     setAccelerating(false);
-    
-    // Only show accelerate button again if not completed and after a delay
-    if (newProgressAfterAccelerate < 100) {
-      setTimeout(() => setShowAccelerateButton(true), 5000);
-    } else {
-      setShowAccelerateButton(false); // Hide if completed
-    }
   };
 
   const getSteps = (progress) => {
@@ -396,30 +292,53 @@ export default function InstagramSpy() {
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, ''); // Remove acentos
     
-    // Remove caracteres especiais, mantém apenas letras, números, . _ -
-    formatted = formatted.replace(/[^a-z0-9._-]/g, '');
+    // Remove caracteres especiais, mantém apenas letras, números, . e _
+    formatted = formatted.replace(/[^a-z0-9._]/g, '');
     
-    // Limita a 30 caracteres
-    formatted = formatted.slice(0, 30);
-    return formatted;
+    // Limita a 30 caracteres (regra do Instagram)
+    return formatted.slice(0, 30);
   };
 
   const validateUsername = (value) => {
-    if (value.length < 5) {
-      setUsernameError("Mínimo 5 caracteres");
+    if (!value || value.length === 0) {
+      setUsernameError("");
       return false;
     }
+    
     if (value.length > 30) {
       setUsernameError("Máximo 30 caracteres");
       return false;
     }
+
+    if (!/^[a-z0-9._]+$/.test(value)) {
+      setUsernameError("Apenas letras, números, . e _ são permitidos");
+      return false;
+    }
+
+    if (value.startsWith('.')) {
+      setUsernameError("Não pode começar com .");
+      return false;
+    }
+
+    if (value.endsWith('.')) {
+      setUsernameError("Não pode terminar com .");
+      return false;
+    }
+
+    if (value.includes('..')) {
+      setUsernameError("Não pode ter dois pontos seguidos");
+      return false;
+    }
+
     setUsernameError("");
     return true;
   };
 
   const handleUsernameChange = (e) => {
-    const formatted = formatUsername(e.target.value);
+    const rawValue = e.target.value;
+    const formatted = formatUsername(rawValue);
     setUsername(formatted);
+    // Só validar se tiver algum caractere digitado
     if (formatted.length > 0) {
       validateUsername(formatted);
     } else {
@@ -430,9 +349,17 @@ export default function InstagramSpy() {
   const startInvestigation = async () => {
     playSound('click');
     
-    if (!username.trim()) return;
+    if (!username.trim()) {
+      setAlertMessage("Por favor, digite um username do Instagram");
+      setShowAlertModal(true);
+      return;
+    }
     
     if (!validateUsername(username)) {
+      if (usernameError) {
+        setAlertMessage(usernameError);
+        setShowAlertModal(true);
+      }
       return;
     }
 
@@ -448,87 +375,55 @@ export default function InstagramSpy() {
     
     setLoading(true);
 
-    const newInvestigation = await base44.entities.Investigation.create({
-      service_name: "Instagram",
-      target_username: username,
-      status: "processing",
-      progress: 1, // Começa em 1%
-      estimated_days: 5,
-      is_accelerated: false
-    });
-
-    // Initialize local storage start time for the new investigation
-    const localStorageStartTimeKey = `instagram_start_${newInvestigation.id}`;
-    localStorage.setItem(localStorageStartTimeKey, Date.now().toString()); // Set start time
-
-    if (userProfile) {
-      await base44.entities.UserProfile.update(userProfile.id, {
-        xp: userProfile.xp + 10,
-        total_investigations: (userProfile.total_investigations || 0) + 1
+    try {
+      const newInvestigation = await base44.entities.Investigation.create({
+        service_name: "Instagram",
+        target_username: username,
+        status: "processing",
+        progress: 1, // Começa em 1%
+        estimated_days: 5,
+        is_accelerated: false,
+        created_by: user?.email || ''
       });
-      // Invalidate and refetch user profile to update XP/total_investigations display immediately
-      queryClient.invalidateQueries(['userProfile', user?.email]);
-    }
 
-    setLoading(false);
-    await refetch();
+      // Initialize local storage start time for the new investigation
+      const localStorageStartTimeKey = `instagram_start_${newInvestigation.id}`;
+      localStorage.setItem(localStorageStartTimeKey, Date.now().toString()); // Set start time
+
+      if (userProfile) {
+        await base44.entities.UserProfile.update(userProfile.id, {
+          xp: (userProfile.xp || 0) + 10,
+          total_investigations: (userProfile.total_investigations || 0) + 1
+        });
+        // Invalidate and refetch user profile to update XP/total_investigations display immediately
+        queryClient.invalidateQueries(['userProfile', user?.email]);
+      }
+
+      // Invalidate investigations to refetch
+      queryClient.invalidateQueries(['investigations', user?.email]);
+      await refetch();
+    } catch (error) {
+      console.error("Erro ao criar investigação:", error);
+      setAlertMessage("Erro ao iniciar investigação. Tente novamente.");
+      setShowAlertModal(true);
+      playSound('error');
+    } finally {
+      setLoading(false);
+    }
   };
 
   let mainContent;
 
   if (activeInstagramInvestigation) {
     const progress = displayedProgress; // Use displayedProgress for UI rendering
-    const showAccelerate = progress >= 1 && progress < 100 && showAccelerateButton;
+    const showAccelerate = progress >= 1 && progress < 100 && localStorage.getItem(`accelerate_shown_${activeInstagramInvestigation.id}`) === 'true';
     const steps = getSteps(progress);
     const estimatedTime = getEstimatedTime(progress);
 
     mainContent = (
-      <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        {/* Header */}
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button
-              variant="ghost"
-              onClick={() => navigate(createPageUrl("Dashboard"))}
-              className="h-9 px-3 hover:bg-gray-100"
-              size="sm"
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            
-            <h1 className="text-base font-bold text-gray-900">Instagram</h1>
-            
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
+      <div className="min-h-screen bg-gradient-to-br from-[#FFE5DC] via-[#FFEEE8] to-[#FFF5F2]">
         <div className="w-full max-w-2xl mx-auto p-3">
-          <Card className="bg-white border-0 shadow-lg p-4 mb-3 relative overflow-hidden">
-            {/* Efeito de partículas quando em progresso */}
-            {progress < 100 && (
-              <div className="absolute inset-0 pointer-events-none">
-                {[...Array(5)].map((_, i) => (
-                  <div
-                    key={i}
-                    className="absolute w-1 h-1 bg-purple-400 rounded-full animate-particle"
-                    style={{
-                      left: `${20 + i * 15}%`,
-                      animationDelay: `${i * 0.5}s`,
-                      animationDuration: '2s',
-                      // Ensure particles are always visible relative to the card,
-                      // even if it overflows briefly during animation start.
-                      transform: 'translateY(100%)' // Start from bottom
-                    }}
-                  />
-                ))}
-              </div>
-            )}
+          <Card className="bg-white border border-[#FFD9CB] shadow-lg p-4 mb-3 relative overflow-hidden">
 
             {/* Confete quando completo */}
             {progress === 100 && (
@@ -551,22 +446,25 @@ export default function InstagramSpy() {
             )}
 
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
-                <Instagram className="w-6 h-6 text-white" />
-              </div>
+              <InstagramAppIcon size="md" />
               <div className="flex-1 min-w-0">
                 <h3 className="font-bold text-gray-900 truncate">@{activeInstagramInvestigation.target_username}</h3>
                 <p className="text-xs text-gray-600">Analisando perfil...</p>
               </div>
-              <Badge className="bg-purple-100 text-purple-700 border-0 flex-shrink-0">
-                {progress}%
+              <Badge className="bg-[#FFE8E2] text-[#FF6B4A] border-0 flex-shrink-0">
+                {progress >= 100 ? '✔ Completo' : `${progress}%`}
               </Badge>
             </div>
 
             <div className="w-full bg-gray-200 rounded-full h-2 mb-4">
               <div
-                className="h-2 rounded-full transition-all duration-1000 bg-gradient-to-r from-purple-500 to-pink-500"
-                style={{ width: `${progress}%` }}
+                className="h-2 rounded-full transition-all duration-1000"
+                style={{
+                  width: `${progress}%`,
+                  background: progress >= 100
+                    ? '#34D399'
+                    : 'linear-gradient(90deg, #FF6B4A 0%, #FF8B68 55%, #FFD2C1 100%)'
+                }}
               />
             </div>
 
@@ -576,14 +474,14 @@ export default function InstagramSpy() {
                   key={step.id}
                   className={`flex items-center gap-2 p-2 rounded-lg ${
                     step.completed ? 'bg-green-50 border-l-2 border-green-500' :
-                    step.active ? 'bg-purple-50 border-l-4 border-purple-500' :
+                    step.active ? 'bg-[#FFEAE1] border-l-4 border-[#FF6B4A]' :
                     'opacity-40'
                   }`}
                 >
                   {step.completed ? (
                     <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
                   ) : step.active ? (
-                    <Loader2 className="w-4 h-4 text-purple-600 flex-shrink-0 animate-spin" />
+                    <Loader2 className="w-4 h-4 text-[#FF6B4A] flex-shrink-0 animate-spin" />
                   ) : (
                     <div className="w-4 h-4 rounded-full border-2 border-gray-300 flex-shrink-0" />
                   )}
@@ -626,15 +524,15 @@ export default function InstagramSpy() {
             )}
           </Card>
 
-          {showAccelerate && (
-            <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-3 shadow-sm border border-purple-200">
+          {showAccelerateButton && (
+            <div className="bg-gradient-to-br from-[#FFEAE1] to-[#FFF4F0] rounded-xl p-3 shadow-sm border border-[#FFD6C8]">
               <p className="text-center text-gray-600 text-xs mb-2">
                 A análise está demorando...
               </p>
               <Button 
                 onClick={handleAccelerate}
                 disabled={accelerating}
-                className="w-full h-10 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-semibold text-sm rounded-lg shadow-sm"
+                className="w-full h-10 bg-gradient-to-r from-[#FF6B4A] to-[#FF8B68] hover:from-[#FF7A58] hover:to-[#FFA07F] text-white font-semibold text-sm rounded-lg shadow-sm"
               >
                 {accelerating ? (
                   <div className="flex items-center gap-2">
@@ -644,7 +542,7 @@ export default function InstagramSpy() {
                 ) : (
                   <div className="flex items-center gap-2">
                     <Zap className="w-4 h-4" />
-                    Acelerar por 20 créditos
+                    Acelerar por 30 créditos
                   </div>
                 )}
               </Button>
@@ -653,19 +551,6 @@ export default function InstagramSpy() {
         </div>
 
         <style>{`
-          @keyframes particle {
-            0% { 
-              transform: translateY(100%) scale(0.5); /* Start from bottom, smaller */
-              opacity: 0.5;
-            }
-            50% {
-              opacity: 1;
-            }
-            100% { 
-              transform: translateY(-100%) scale(1.5); /* Move up and grow */
-              opacity: 0;
-            }
-          }
           @keyframes confetti {
             0% { 
               transform: translateY(0) rotate(0deg);
@@ -676,9 +561,6 @@ export default function InstagramSpy() {
               opacity: 0;
             }
           }
-          .animate-particle {
-            animation: particle 2s ease-out infinite;
-          }
           .animate-confetti {
             animation: confetti 1.5s ease-out forwards;
           }
@@ -687,72 +569,55 @@ export default function InstagramSpy() {
     );
   } else {
     mainContent = (
-      <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        {/* Header */}
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button
-              variant="ghost"
-              onClick={() => navigate(createPageUrl("Dashboard"))}
-              className="h-9 px-3 hover:bg-gray-100"
-              size="sm"
-            >
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            
-            <h1 className="text-base font-bold text-gray-900">Instagram</h1>
-            
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
+      <div className="min-h-screen bg-gradient-to-br from-[#FFE5DC] via-[#FFEEE8] to-[#FFF5F2]">
         <div className="w-full max-w-2xl mx-auto p-3">
-          <Card className="bg-white border-0 shadow-lg p-6">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 rounded-2xl bg-pink-100 flex items-center justify-center mx-auto mb-4 shadow-sm">
-                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
-                  <Instagram className="w-6 h-6 text-white" />
+          <Card className="bg-white border border-[#FFD9CB] shadow-lg p-6 overflow-hidden">
+            <div className="absolute -top-12 -right-10 w-32 h-32 bg-[#FFE7DC] rounded-full opacity-60" aria-hidden="true" />
+            <div className="relative space-y-6">
+              <div className="flex items-center gap-3">
+                <InstagramAppIcon size="md" />
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Investigar Instagram</h2>
+                  <p className="text-xs text-gray-500">Descubra seguidores ocultos, conversas, stalkers e muito mais.</p>
                 </div>
               </div>
-            </div>
 
-            <div className="space-y-4">
+              <div className="bg-[#FFF0EB] border border-[#FFE0D4] rounded-xl p-3 text-xs text-[#7A5B51]">
+                <span className="font-semibold text-[#FF6B4A]">Dica:</span> informe exatamente como aparece no Instagram. Não precisa colocar @, letras maiúsculas ou espaços.
+              </div>
+
               <div>
-                <label className="block text-base font-semibold text-gray-700 mb-2">
-                  Informe o nome de usuário
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Digite o nome de usuário (sem o @)
                 </label>
-                <div className="relative">
-                  <AtSign className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <div className={`flex items-center gap-2 bg-white rounded-xl border-2 px-3 py-2 transition-colors ${
+                  usernameError 
+                    ? 'border-red-300 focus-within:border-red-400' 
+                    : 'border-[#FFCDBA] focus-within:border-[#FF9C7A]'
+                }`}>
+                  <span className="text-[#FF6B4A] font-semibold text-lg">@</span>
                   <Input
                     type="text"
-                    placeholder="nome_de_usuario"
+                    placeholder="Ex: lucas_silva10"
                     value={username}
                     onChange={handleUsernameChange}
                     onKeyPress={(e) => e.key === 'Enter' && startInvestigation()}
-                    className={`pl-12 h-12 text-base border-2 ${
-                      usernameError 
-                        ? 'border-red-300 focus:border-red-400 focus:ring-red-400' 
-                        : 'border-purple-200 focus:border-purple-400 focus:ring-purple-400'
-                    } rounded-xl`}
+                    className="flex-1 border-none bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-sm h-9"
                     disabled={loading}
                     maxLength={30}
+                    autoComplete="off"
                   />
-                  {usernameError && (
-                    <p className="text-xs text-red-600 mt-1 ml-1">{usernameError}</p>
-                  )}
                 </div>
+            
+                {usernameError && (
+                  <p className="text-xs text-red-600 mt-1">{usernameError}</p>
+                )}
               </div>
 
               <Button
                 onClick={startInvestigation}
-                disabled={!username.trim() || username.length < 5 || loading}
-                className="w-full h-12 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold text-base rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!username.trim() || username.length < 3 || loading}
+                className="w-full h-12 bg-gradient-to-r from-[#FF6B4A] to-[#FF8B68] hover:from-[#FF7A58] hover:to-[#FFA07F] text-white font-bold text-base rounded-xl shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? (
                   <div className="flex items-center gap-2">
@@ -760,15 +625,13 @@ export default function InstagramSpy() {
                     Buscando perfil...
                   </div>
                 ) : (
-                  "Iniciar Investigação"
+                  "Iniciar investigação"
                 )}
               </Button>
 
-              <div className="text-center">
-                <Badge className="bg-green-500 text-white border-0 text-xs font-bold px-3 py-1">
-                  🎉 GRÁTIS
-                </Badge>
-              </div>
+              <p className="text-center text-[13px] text-gray-500">
+                🎉 Investigação gratuita, sem gastar créditos.
+              </p>
             </div>
           </Card>
         </div>

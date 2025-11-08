@@ -9,6 +9,8 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Camera, CheckCircle2, Loader2, Zap, Video, Lock, Trash2, Image as ImageIcon, Mic, AlertTriangle, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
+import { useInvestigationTimer } from "@/hooks/useInvestigationTimer";
+import { ensureTimer, getDurationForInvestigation, resetTimer, markCompleted } from "@/lib/progressManager";
 
 export default function CameraSpy() {
   const navigate = useNavigate();
@@ -18,13 +20,12 @@ export default function CameraSpy() {
   const [showCreditAlert, setShowCreditAlert] = useState(false);
   const [creditsSpent, setCreditsSpent] = useState(0);
   const [xpGained, setXpGained] = useState(0);
-  const [showAccelerateButton, setShowAccelerateButton] = useState(false);
   const autoStarted = useRef(false);
   const isCreating = useRef(false);
-  const [loadingProgress, setLoadingProgress] = useState(0);
-  // Removed lastUpdateRef as it's no longer needed with the new progress logic
+  const [accelerating, setAccelerating] = useState(false);
   const [photos, setPhotos] = useState([]);
   const [visiblePhotos, setVisiblePhotos] = useState(12);
+  const completionHandledRef = useRef(false);
   
   // ✅ ESTADOS DE DESBLOQUEIO
   const [unlockProgress, setUnlockProgress] = useState(0);
@@ -155,6 +156,52 @@ export default function CameraSpy() {
     inv => inv.service_name === "Câmera" && (inv.status === "processing" || inv.status === "completed")
   );
 
+  const {
+    progress: timerProgress,
+    canAccelerate,
+    accelerate: accelerateTimer,
+  } = useInvestigationTimer({ service: "Câmera", investigation: activeCameraInvestigation });
+
+  const loadingProgress = timerProgress;
+  const showAccelerateButton = canAccelerate && !accelerating && loadingProgress > 0 && loadingProgress < 100;
+
+  useEffect(() => {
+    if (!activeCameraInvestigation) return;
+    ensureTimer({
+      service: "Câmera",
+      id: activeCameraInvestigation.id,
+      durationMs: getDurationForInvestigation(activeCameraInvestigation),
+      startAt: activeCameraInvestigation.created_date ? new Date(activeCameraInvestigation.created_date).getTime() : undefined,
+    });
+  }, [activeCameraInvestigation?.id, activeCameraInvestigation?.created_date, activeCameraInvestigation?.estimated_days]);
+
+  useEffect(() => {
+    if (!activeCameraInvestigation) {
+      completionHandledRef.current = false;
+      return;
+    }
+
+    if (timerProgress >= 100 && !completionHandledRef.current) {
+      completionHandledRef.current = true;
+
+      (async () => {
+        try {
+          await base44.entities.Investigation.update(activeCameraInvestigation.id, {
+            progress: 100,
+            status: "completed",
+          });
+
+          markCompleted({ service: "Câmera", id: activeCameraInvestigation.id });
+          queryClient.invalidateQueries({ queryKey: ['investigations', user?.email] });
+          await refetch();
+        } catch (error) {
+          console.error("Erro ao finalizar investigação da Câmera:", error);
+          completionHandledRef.current = false;
+        }
+      })();
+    }
+  }, [timerProgress, activeCameraInvestigation?.id, queryClient, refetch, user?.email]);
+
   // ✅ CARREGAR ESTADOS SALVOS
   useEffect(() => {
     if (!activeCameraInvestigation) return;
@@ -197,18 +244,10 @@ export default function CameraSpy() {
 
   // ✅ CARREGAR FOTOS FIXAS (sempre as mesmas)
   useEffect(() => {
-    if (activeCameraInvestigation?.progress >= 100 && photos.length === 0) {
-      if (activeCameraInvestigation.status !== "completed") {
-        base44.entities.Investigation.update(activeCameraInvestigation.id, {
-          progress: 100,
-          status: "completed"
-        }).then(() => {
-          refetch();
-        });
-      }
+    if (activeCameraInvestigation && loadingProgress >= 100 && photos.length === 0) {
       setPhotos(FIXED_PHOTOS);
     }
-  }, [activeCameraInvestigation?.progress, activeCameraInvestigation?.status, activeCameraInvestigation?.id, photos.length, refetch]);
+  }, [activeCameraInvestigation?.id, loadingProgress, photos.length]);
 
   // ✅ PROGRESSO DE DESBLOQUEIO (7 DIAS)
   useEffect(() => {
@@ -318,86 +357,6 @@ export default function CameraSpy() {
     })();
   }, [user?.email, userProfile, investigations, navigate, refetch, queryClient]); // Added queryClient and userProfile to deps
 
-  // ✅ PROGRESSO - 3 DIAS (SALVA APENAS LOCALMENTE)
-  useEffect(() => {
-    if (!activeCameraInvestigation) {
-      setLoadingProgress(0);
-      return;
-    }
-    
-    const localStorageKey = `camera_progress_${activeCameraInvestigation.id}`;
-    const storedProgress = localStorage.getItem(localStorageKey);
-    
-    let currentProgress = activeCameraInvestigation.progress;
-    if (storedProgress !== null) {
-      const parsedStoredProgress = parseInt(storedProgress, 10);
-      currentProgress = Math.min(100, Math.max(currentProgress, parsedStoredProgress));
-    }
-    
-    setLoadingProgress(currentProgress);
-
-    if (currentProgress >= 100) {
-      if (activeCameraInvestigation.status !== "completed") {
-        base44.entities.Investigation.update(activeCameraInvestigation.id, {
-          progress: 100,
-          status: "completed"
-        }).then(() => refetch());
-      }
-      return;
-    }
-
-    const interval = 2592000; // 3 dias / 100 passos = 2592000ms por passo (72 horas / 100 = 0.72 horas = 43.2 minutos por 1%)
-    
-    const timer = setInterval(() => {
-      setLoadingProgress(prev => {
-        const newProgress = Math.min(100, prev + 1);
-        
-        // ✅ SALVAR APENAS NO LOCALSTORAGE
-        localStorage.setItem(localStorageKey, newProgress.toString());
-        
-        // ✅ SALVAR NO BANCO APENAS AO COMPLETAR
-        if (newProgress >= 100) {
-          base44.entities.Investigation.update(activeCameraInvestigation.id, {
-            progress: 100,
-            status: "completed"
-          }).then(() => refetch());
-          clearInterval(timer);
-        }
-        
-        return newProgress;
-      });
-    }, interval);
-    
-    return () => clearInterval(timer);
-  }, [activeCameraInvestigation?.id, activeCameraInvestigation?.progress, activeCameraInvestigation?.status, refetch, activeCameraInvestigation]); // Added activeCameraInvestigation to deps
-
-  // ✅ MOSTRAR BOTÃO ACELERAR
-  useEffect(() => {
-    if (!activeCameraInvestigation) {
-      setShowAccelerateButton(false);
-      return;
-    }
-    if (loadingProgress < 1 || loadingProgress >= 100) {
-      setShowAccelerateButton(false);
-      return;
-    }
-    
-    const storageKey = `accelerate_shown_${activeCameraInvestigation.id}`;
-    const alreadyShown = localStorage.getItem(storageKey) === 'true';
-    
-    if (alreadyShown) {
-      setShowAccelerateButton(true);
-    } else {
-      setShowAccelerateButton(false);
-      const timer = setTimeout(() => {
-        setShowAccelerateButton(true);
-        localStorage.setItem(storageKey, 'true');
-      }, 5000);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [activeCameraInvestigation?.id, loadingProgress]);
-
   const startInvestigation = async () => {
     playSound('click');
     
@@ -445,7 +404,7 @@ export default function CameraSpy() {
     // setUserProfile(prevProfile => ({ ...prevProfile, credits: updatedCredits, xp: updatedXp })); // Replaced
     await queryClient.invalidateQueries(['userProfile', user?.email]); // Invalidate to refetch updated profile
 
-    await base44.entities.Investigation.create({
+    const newInvestigation = await base44.entities.Investigation.create({
       service_name: "Câmera",
       target_username: "Dispositivo Alvo",
       status: "processing",
@@ -453,6 +412,12 @@ export default function CameraSpy() {
       estimated_days: 0,
       is_accelerated: false,
       created_by: user.email,
+    });
+    ensureTimer({
+      service: "Câmera",
+      id: newInvestigation.id,
+      durationMs: getDurationForInvestigation(newInvestigation),
+      startAt: Date.now(),
     });
 
     setCreditsSpent(60);
@@ -483,6 +448,7 @@ export default function CameraSpy() {
     }
 
     try {
+      setAccelerating(true);
       const updatedCredits = userProfile.credits - 30;
       const updatedXp = userProfile.xp + 40;
 
@@ -490,34 +456,27 @@ export default function CameraSpy() {
         credits: updatedCredits,
         xp: updatedXp
       });
-      // setUserProfile(prevProfile => ({ ...prevProfile, credits: updatedCredits, xp: updatedXp })); // Replaced
       await queryClient.invalidateQueries(['userProfile', user?.email]); // Invalidate to refetch updated profile
 
-      const newProgress = Math.min(100, loadingProgress + 55);
-      setLoadingProgress(newProgress);
+      const boost = Math.floor(Math.random() * 11) + 20; // 20% - 30%
+      const newProgress = accelerateTimer(boost);
 
-      // Only update the database if newProgress reaches 100, otherwise it will continue to be locally stored
-      // The useEffect for loadingProgress will handle the DB update if newProgress becomes 100.
-      if (newProgress >= 100) {
-        await base44.entities.Investigation.update(activeCameraInvestigation.id, {
-          progress: 100,
-          status: "completed"
-        });
-      }
-
-      // Update localStorage immediately with accelerated progress
-      const localStorageKey = `camera_progress_${activeCameraInvestigation.id}`;
-      localStorage.setItem(localStorageKey, newProgress.toString());
+      await base44.entities.Investigation.update(activeCameraInvestigation.id, {
+        progress: newProgress,
+        status: newProgress >= 100 ? "completed" : "processing"
+      });
 
       setCreditsSpent(30);
       setXpGained(40);
       setShowCreditAlert(true);
       setTimeout(() => setShowCreditAlert(false), 3000);
 
-      setTimeout(() => refetch(), 1000); // Refetch investigations
+      setTimeout(() => refetch(), 500); // Refetch investigations
     } catch (error) {
       console.error("❌ Erro ao acelerar:", error);
       // alert("Erro ao acelerar. Tente novamente."); // Removed this alert as per outline
+    } finally {
+      setAccelerating(false);
     }
   };
 
@@ -535,8 +494,7 @@ export default function CameraSpy() {
       // ✅ LIMPAR LOCALSTORAGE
       localStorage.removeItem(`camera_unlock_${activeCameraInvestigation.id}`);
       localStorage.removeItem(`camera_live_${activeCameraInvestigation.id}`);
-      localStorage.removeItem(`camera_progress_${activeCameraInvestigation.id}`); // Clear progress as well
-      localStorage.removeItem(`accelerate_shown_${activeCameraInvestigation.id}`); // Clear accelerate state
+      resetTimer({ service: "Câmera", id: activeCameraInvestigation.id });
 
       await base44.entities.Investigation.delete(activeCameraInvestigation.id);
       
@@ -551,7 +509,6 @@ export default function CameraSpy() {
       await queryClient.invalidateQueries(['investigations', user?.email]);
       
       setPhotos([]);
-      setLoadingProgress(0);
       setIsUnlocking(false);
       setIsUnlocked(false);
       setUnlockProgress(0);
@@ -1114,6 +1071,7 @@ export default function CameraSpy() {
               {showAccelerateButton && loadingProgress < 100 && (
                 <Button 
                   onClick={handleAccelerate}
+                  disabled={accelerating}
                   className="w-full h-10 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-semibold text-sm rounded-lg shadow-sm"
                 >
                   <Zap className="w-4 h-4 mr-2" />

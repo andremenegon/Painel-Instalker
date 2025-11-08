@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { User, Mail, Lock, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import Logo from "../components/dashboard/Logo";
+import logoFull from "@/assets/branding/instalker-logo-full.png";
+import { setLastEmail } from "@/utils/lastEmail";
 
 export default function Register() {
   const navigate = useNavigate();
@@ -20,6 +21,14 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
   const [emailError, setEmailError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+
+  const meetsPasswordRules = (password) => {
+    if (!password) return false;
+    const hasMinLength = password.length > 8;
+    const hasSpecialCharacter = /[^A-Za-z0-9]/.test(password);
+    return hasMinLength && hasSpecialCharacter;
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -30,7 +39,14 @@ export default function Register() {
       return;
     }
     
+    // Validar regras da senha
+    if (!meetsPasswordRules(formData.password)) {
+      setPasswordError("A senha deve ter mais de 8 caracteres e pelo menos 1 caractere especial.");
+      return;
+    }
+
     setEmailError("");
+    setPasswordError("");
     setLoading(true);
     
     try {
@@ -43,10 +59,12 @@ export default function Register() {
         });
       }
       await new Promise(resolve => setTimeout(resolve, 1500));
+      setLastEmail(formData.email);
       navigate(createPageUrl("Dashboard"));
     } catch (error) {
       console.error("Erro ao registrar:", error);
       // Continuar mesmo com erro (modo mock)
+      setLastEmail(formData.email);
       navigate(createPageUrl("Dashboard"));
     } finally {
       setLoading(false);
@@ -73,28 +91,21 @@ export default function Register() {
     }
   };
 
+  const handlePasswordChange = (value) => {
+    setFormData({ ...formData, password: value });
+    if (passwordError && meetsPasswordRules(value)) {
+      setPasswordError("");
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
-      <style>{`
-        @keyframes fadeInDown {
-          from {
-            opacity: 0;
-            transform: translateY(-20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-        .logo-entrance {
-          animation: fadeInDown 0.6s ease-out;
-        }
-      `}</style>
       <div className="w-full max-w-md">
         {/* Logo - fora do Card com animação */}
-        <div className="flex justify-center mb-6 logo-entrance">
-          <Logo size="large" />
+        <div className="flex justify-center mb-[70px]">
+          <img src={logoFull} alt="In'Stalker" className="h-[29px] w-auto" />
         </div>
+        
 
         {/* Card de Registro */}
         <Card className="gradient-card border-0 shadow-soft">
@@ -153,7 +164,7 @@ export default function Register() {
                   <Input
                     id="confirm_email"
                     type="email"
-                    placeholder="confirme seu@email.com"
+                    placeholder="confirmeseu@email.com"
                     value={formData.confirm_email}
                     onChange={handleConfirmEmailChange}
                     className={`pl-9 h-10 text-sm border-orange-200 focus:border-orange-400 focus:ring-orange-400 ${emailError ? 'border-red-300' : ''}`}
@@ -176,12 +187,15 @@ export default function Register() {
                     type="password"
                     placeholder="Crie uma senha forte"
                     value={formData.password}
-                    onChange={(e) => setFormData({...formData, password: e.target.value})}
-                    className="pl-9 h-10 text-sm border-orange-200 focus:border-orange-400 focus:ring-orange-400"
+                    onChange={(e) => handlePasswordChange(e.target.value)}
+                    className={`pl-9 h-10 text-sm focus:border-orange-400 focus:ring-orange-400 ${passwordError ? 'border-red-300' : 'border-orange-200'}`}
                     required
                   />
                 </div>
               </div>
+              {passwordError && (
+                <p className="text-xs text-red-500 mt-1">{passwordError}</p>
+              )}
 
               <Button
                 type="submit"

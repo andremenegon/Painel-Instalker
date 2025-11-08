@@ -11,6 +11,8 @@ import { MapContainer, TileLayer, CircleMarker, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
+import { useInvestigationTimer } from "@/hooks/useInvestigationTimer";
+import { ensureTimer, getDurationForInvestigation, resetTimer, markCompleted } from "@/lib/progressManager";
 
 function MapUpdater({ center }) {
   const map = useMap();
@@ -32,23 +34,351 @@ export default function LocationSpy() {
   const [detectedLocation, setDetectedLocation] = useState(null);
   const [motels, setMotels] = useState([]); // Renamed to `allLocations` conceptually
   const [realLocations, setRealLocations] = useState([]); // Initial locations to display
-  const [showAccelerateButton, setShowAccelerateButton] = useState(false);
   const [accelerating, setAccelerating] = useState(false);
   const [showMoreLocations, setShowMoreLocations] = useState(false);
   const [realTimeTracking, setRealTimeTracking] = useState(false);
   const [realTimeProgress, setRealTimeProgress] = useState(0);
-  const [showAccelerateRealTime, setShowAccelerateRealTime] = useState(false);
+  const [acceleratingRealTime, setAcceleratingRealTime] = useState(false);
   const [loadingLocations, setLoadingLocations] = useState(false);
   const [dataLoaded, setDataLoaded] = useState(false);
   // Removed [progressUpdating, setProgressUpdating] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [confirmModalConfig, setConfirmModalConfig] = useState({});
+  const pendingDeleteIdRef = useRef(null);
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [alertMessage, setAlertMessage] = useState("");
   const hasPlayedComplete = useRef(false); // Ref to track if completion sound has played
+  const completionHandledRef = useRef(false);
+  const realTimeIntervalRef = useRef(null);
+  const [locationDetails, setLocationDetails] = useState(null);
+  const [nearbyCities, setNearbyCities] = useState([]);
+  const [nearbyMotels, setNearbyMotels] = useState([]);
 
-  // ✅ NEW STATE VARIABLE FOR LOCAL PROGRESS
-  const [locationProgress, setLocationProgress] = useState(0);
+  const GOOGLE_STREET_VIEW_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY || import.meta.env.VITE_GOOGLE_STREET_VIEW_KEY || '';
+
+  const getStreetViewImage = (lat, lon, name = '', city = '') => {
+    if (!lat || !lon) return null;
+    if (GOOGLE_STREET_VIEW_KEY) {
+      const baseUrl = 'https://maps.googleapis.com/maps/api/streetview';
+      const locationQuery = name
+        ? `${name}${city ? ` ${city}` : ''}`
+        : `${lat},${lon}`;
+      const params = new URLSearchParams({
+        size: '640x360',
+        location: locationQuery,
+        fov: '80',
+        heading: '70',
+        pitch: '0',
+        source: 'outdoor',
+        key: GOOGLE_STREET_VIEW_KEY
+      });
+      return `${baseUrl}?${params.toString()}`;
+    }
+    return 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=800&q=60';
+  };
+
+  const getUnlockStorageKey = (id) => `location_unlocks_${id}`;
+
+  const persistUnlockState = (id, updates) => {
+    if (!id) return;
+    const key = getUnlockStorageKey(id);
+    let current = {};
+    try {
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        current = JSON.parse(stored) || {};
+      }
+    } catch (error) {
+      console.warn("Erro ao ler unlock state da Localização:", error);
+    }
+    const merged = { ...current, ...updates };
+    localStorage.setItem(key, JSON.stringify(merged));
+  };
+
+  const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
+    const toRad = (value) => (value * Math.PI) / 180;
+    const R = 6371;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Math.round(R * c * 10) / 10;
+  };
+
+  const formatDistance = (km) => {
+    if (km < 1) {
+      return `${Math.round(km * 1000)} m`;
+    }
+    return `${km.toFixed(1)} km`;
+  };
+
+  const fetchLocationDetails = async (lat, lon) => {
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=18&addressdetails=1`,
+        {
+          headers: {
+            'Accept-Language': 'pt-BR,pt;q=0.9'
+          }
+        }
+      );
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const address = data.address || {};
+
+      return {
+        neighborhood: address.suburb || address.neighbourhood || address.quarter || address.village || null,
+        road: address.road || address.pedestrian || address.path || null,
+        city: address.city || address.town || address.village || address.municipality || null,
+        state: address.state || address.region || null
+      };
+    } catch (error) {
+      console.warn('Não foi possível obter detalhes do endereço:', error);
+      return null;
+    }
+  };
+
+  const fetchNearbyCities = async (lat, lon) => {
+    const radius = 50000;
+    const overpassQuery = `[out:json][timeout:15];(
+      node["place"="city"](around:${radius},${lat},${lon});
+      node["place"="town"](around:${radius},${lat},${lon});
+    );out body 20;`;
+    const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Status ${response.status}`);
+      const data = await response.json();
+
+      if (!data.elements) return [];
+
+      const unique = new Map();
+      data.elements.forEach((city) => {
+        const name = city.tags?.name;
+        if (!name || unique.has(name.toLowerCase())) return;
+        const distance = calculateDistanceKm(lat, lon, city.lat, city.lon);
+        unique.set(name.toLowerCase(), {
+          name,
+          distance,
+        });
+      });
+
+      return Array.from(unique.values())
+        .filter(city => city.distance <= 50)
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, 6);
+    } catch (error) {
+      console.warn('Não foi possível buscar cidades próximas:', error);
+      return [];
+    }
+  };
+
+  const motelFallbackImagePool = [
+    'https://images.unsplash.com/photo-1496417263034-38ec4f0b665a?auto=format&fit=crop&w=1280&q=60',
+    'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1280&q=60',
+    'https://images.unsplash.com/photo-1528909514045-2fa4ac7a08ba?auto=format&fit=crop&w=1280&q=60',
+    'https://images.unsplash.com/photo-1505691723518-36a5ac3be353?auto=format&fit=crop&w=1280&q=60',
+    'https://images.unsplash.com/photo-1621330019960-d1574fef6e0f?auto=format&fit=crop&w=1280&q=60',
+  ];
+
+  const getMotelImage = async (motel) => {
+    if (!motel?.name) return null;
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(motel.name)}%20${encodeURIComponent(motel.city || '')}&inputtype=textquery&fields=photos&key=${GOOGLE_STREET_VIEW_KEY}`
+      );
+      const data = await response.json();
+      const photoRef = data?.candidates?.[0]?.photos?.[0]?.photo_reference;
+      if (photoRef) {
+        return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=1280&photoreference=${photoRef}&key=${GOOGLE_STREET_VIEW_KEY}`;
+      }
+    } catch (error) {
+      console.warn('Falha ao buscar foto real do estabelecimento:', error);
+    }
+    return null;
+  };
+
+  const buildFallbackMotels = async (lat, lon, cidade, estado, neighborhood = null) => {
+    const sampleMotels = [
+      {
+        name: 'Motel Miragem Premium',
+        address: neighborhood ? `${neighborhood}, ${cidade}` : `${cidade} - ${estado}`,
+        description: 'Suítes temáticas com hidromassagem e garagem privativa.',
+      },
+      {
+        name: 'Sensations Motel & Spa',
+        address: `Região Metropolitana de ${cidade}`,
+        description: 'Pacotes com pernoite, spa aromático e café da manhã exclusivo.',
+      },
+      {
+        name: 'Lux Garden Motel',
+        address: `Rodovia acesso ${cidade}, KM 08`,
+        description: 'Suítes com teto panorâmico e piscina aquecida individual.',
+      },
+    ];
+
+    const result = [];
+    for (let index = 0; index < sampleMotels.length; index++) {
+      const motel = sampleMotels[index];
+      const jitterLat = lat + (Math.random() - 0.5) * 0.05;
+      const jitterLon = lon + (Math.random() - 0.5) * 0.05;
+      const baseData = {
+        ...motel,
+        distance: formatDistance((index + 1) * 4.8),
+        lat: jitterLat,
+        lon: jitterLon,
+        city: cidade,
+        categoria: 'motel',
+      };
+      let imageUrl = getStreetViewImage(jitterLat, jitterLon, motel.name, cidade);
+      if (!imageUrl && GOOGLE_STREET_VIEW_KEY) {
+        imageUrl = await getMotelImage({ ...baseData, name: motel.name });
+      }
+      baseData.imageUrl = imageUrl || motelFallbackImagePool[index % motelFallbackImagePool.length];
+      result.push(baseData);
+    }
+
+    for (const motel of result) {
+      try {
+        const details = await fetchLocationDetails(motel.lat, motel.lon);
+        if (details?.city) {
+          motel.city = details.city;
+        }
+        if (details?.road) {
+          motel.address = details.road;
+        }
+      } catch (error) {
+        // ignore errors
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+
+    return result;
+  };
+
+  const fetchNearbyMotels = async (lat, lon, cidade, estado, neighborhood = null) => {
+    const radius = 50000;
+    const overpassQuery = `[out:json][timeout:20];(
+      node["amenity"="love_hotel"](around:${radius},${lat},${lon});
+      node["amenity"="motel"](around:${radius},${lat},${lon});
+    );out body 20;`;
+    const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(overpassQuery)}`;
+
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Status ${response.status}`);
+      const data = await response.json();
+
+      if (!data.elements || data.elements.length === 0) {
+        return await buildFallbackMotels(lat, lon, cidade, estado, neighborhood);
+      }
+
+      const unique = [];
+      const namesSeen = new Set();
+      data.elements.forEach((item) => {
+        const name = item.tags?.name;
+        const motelLat = item.lat || item.center?.lat;
+        const motelLon = item.lon || item.center?.lon;
+        const amenity = item.tags?.amenity;
+        const originalName = name && name.trim();
+        let placeName = originalName;
+        const baseCity = item.tags?.['addr:city'] || item.tags?.city || item.tags?.town || item.tags?.village || cidade;
+        if (!placeName) {
+          const streetName = item.tags?.['addr:street'] || item.tags?.street;
+          placeName = streetName ? `Motel confidencial ${streetName}` : `Motel confidencial em ${baseCity || 'região'}`;
+        }
+        const baseKey = placeName.toLowerCase();
+        let uniqueKey = baseKey;
+        let suffix = 2;
+        while (namesSeen.has(uniqueKey)) {
+          uniqueKey = `${baseKey} #${suffix++}`;
+        }
+        if (suffix > 2) {
+          placeName = `${placeName} (${suffix - 1})`;
+        }
+        if (!motelLat || !motelLon) return;
+        if (amenity !== 'love_hotel' && amenity !== 'motel') return;
+        namesSeen.add(uniqueKey);
+        const distanceKm = calculateDistanceKm(lat, lon, motelLat, motelLon);
+        const rawCity = baseCity || item.tags?.municipality || item.tags?.['is_in:city'];
+        const street = item.tags?.['addr:street'] || item.tags?.street;
+        const houseNumber = item.tags?.['addr:housenumber'] || item.tags?.housenumber;
+        const baseAddress = street ? `${street}${houseNumber ? `, ${houseNumber}` : ''}` : (item.tags?.address || item.tags?.addr_full || item.tags?.addr_street || rawCity);
+        unique.push({
+          name: placeName,
+          address: baseAddress || cidade,
+          distance: formatDistance(distanceKm),
+          description: item.tags?.description || 'Suítes reservadas com garagem privativa e acesso discreto.',
+          lat: motelLat,
+          lon: motelLon,
+          city: rawCity || cidade,
+          categoria: 'motel',
+        });
+      });
+
+      for (let i = 0; i < unique.length && i < 6; i++) {
+        const motel = unique[i];
+        if (!motel.city || motel.city.toLowerCase() === (cidade || '').toLowerCase()) {
+          try {
+            const details = await fetchLocationDetails(motel.lat, motel.lon);
+            if (details?.city) {
+              motel.city = details.city;
+            }
+            if (details?.road) {
+              motel.address = details.road;
+            }
+          } catch (error) {
+            // ignore
+          }
+          await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+      }
+
+      const enriched = [];
+      const limited = unique.slice(0, 6);
+      for (let index = 0; index < limited.length; index++) {
+        const motel = limited[index];
+        let imageUrl = getStreetViewImage(motel.lat, motel.lon, motel.name, motel.city);
+        if (!imageUrl && GOOGLE_STREET_VIEW_KEY) {
+          imageUrl = await getMotelImage(motel);
+        }
+        enriched.push({
+          ...motel,
+          imageUrl: imageUrl || motelFallbackImagePool[index % motelFallbackImagePool.length],
+        });
+      }
+
+      return enriched.length > 0 ? enriched : await buildFallbackMotels(lat, lon, cidade, estado, neighborhood);
+    } catch (error) {
+      console.warn('Não foi possível buscar motéis próximos:', error);
+      return await buildFallbackMotels(lat, lon, cidade, estado, neighborhood);
+    }
+  };
+
+  const hydrateLocationContext = async (location) => {
+    if (!location) {
+      return { details: null, cities: [], motels: [] };
+    }
+
+    const details = await fetchLocationDetails(location.lat, location.lon);
+    setLocationDetails(details);
+
+    const [cities, motelsList] = await Promise.all([
+      fetchNearbyCities(location.lat, location.lon),
+      fetchNearbyMotels(location.lat, location.lon, location.cidade, location.estado, details?.neighborhood),
+    ]);
+
+    setNearbyCities(cities);
+    setNearbyMotels(motelsList);
+
+    return { details, cities, motels: motelsList };
+  };
 
   // ✅ FUNÇÃO DE SOM UNIVERSAL
   const playSound = (type) => {
@@ -146,9 +476,93 @@ export default function LocationSpy() {
     inv => inv.service_name === "Localização" && inv.status === "processing"
   );
 
+  const {
+    progress: timerProgress,
+    canAccelerate,
+    accelerate: accelerateTimer,
+  } = useInvestigationTimer({ service: "Localização", investigation: activeLocationInvestigation });
+
   const completedLocationInvestigation = investigations.find(
     inv => inv.service_name === "Localização" && (inv.status === "completed" || inv.status === "accelerated")
   );
+
+  const showAccelerateButton = Boolean(activeLocationInvestigation) && canAccelerate && !accelerating && timerProgress > 0 && timerProgress < 100;
+
+  useEffect(() => {
+    const currentId = activeLocationInvestigation?.id || completedLocationInvestigation?.id;
+    if (!currentId) {
+      setShowMoreLocations(false);
+      setRealTimeTracking(false);
+      setRealTimeProgress(0);
+      setLocationDetails(null);
+      setNearbyCities([]);
+      setNearbyMotels([]);
+      return;
+    }
+
+    try {
+      const stored = localStorage.getItem(getUnlockStorageKey(currentId));
+      if (!stored) return;
+      const parsed = JSON.parse(stored);
+      if (typeof parsed.showMoreLocations === 'boolean') {
+        setShowMoreLocations(parsed.showMoreLocations);
+      }
+      if (typeof parsed.realTimeTracking === 'boolean') {
+        setRealTimeTracking(parsed.realTimeTracking);
+      }
+      if (typeof parsed.realTimeProgress === 'number') {
+        setRealTimeProgress(parsed.realTimeProgress);
+      }
+    } catch (error) {
+      console.warn("Erro ao restaurar unlocks da Localização:", error);
+    }
+  }, [activeLocationInvestigation?.id, completedLocationInvestigation?.id]);
+
+  useEffect(() => {
+    const currentId = activeLocationInvestigation?.id || completedLocationInvestigation?.id;
+
+    if (!realTimeTracking || realTimeProgress >= 100 || !currentId) {
+      if (realTimeIntervalRef.current) {
+        clearInterval(realTimeIntervalRef.current);
+        realTimeIntervalRef.current = null;
+      }
+      if (realTimeProgress >= 100) {
+        persistUnlockState(currentId, { realTimeProgress: 100 });
+      }
+      return () => {};
+    }
+
+    if (realTimeIntervalRef.current) {
+      clearInterval(realTimeIntervalRef.current);
+    }
+
+    realTimeIntervalRef.current = setInterval(() => {
+      setRealTimeProgress((prev) => {
+        if (prev >= 100) {
+          clearInterval(realTimeIntervalRef.current);
+          realTimeIntervalRef.current = null;
+          persistUnlockState(currentId, { realTimeProgress: 100 });
+          return 100;
+        }
+
+        const increment = Math.floor(Math.random() * 9) + 8; // 8 a 16%
+        const next = Math.min(100, prev + increment);
+        persistUnlockState(currentId, { realTimeProgress: next });
+        if (next >= 100) {
+          clearInterval(realTimeIntervalRef.current);
+          realTimeIntervalRef.current = null;
+        }
+        return next;
+      });
+    }, 90000);
+
+    return () => {
+      if (realTimeIntervalRef.current) {
+        clearInterval(realTimeIntervalRef.current);
+        realTimeIntervalRef.current = null;
+      }
+    };
+  }, [realTimeTracking, realTimeProgress, activeLocationInvestigation?.id, completedLocationInvestigation?.id]);
 
   // Helper to update userProfile in react-query cache
   const updateUserProfileCache = (changes) => {
@@ -157,6 +571,13 @@ export default function LocationSpy() {
       const oldProfile = oldProfiles[0];
       const newProfile = { ...oldProfile, ...changes };
       return [newProfile];
+    });
+  };
+
+  const updateLayoutProfileCache = (changes) => {
+    queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
+      if (!oldProfile) return oldProfile;
+      return { ...oldProfile, ...changes };
     });
   };
 
@@ -178,6 +599,12 @@ export default function LocationSpy() {
         setDetectedLocation(savedResults.detectedLocation);
         setMotels(savedResults.motels || []);
         setRealLocations(savedResults.realLocations || []);
+        setLocationDetails(savedResults.locationDetails || null);
+        setNearbyCities(savedResults.nearbyCities || []);
+        setNearbyMotels(savedResults.nearbyMotels || []);
+        if ((!savedResults.nearbyCities || savedResults.nearbyCities.length === 0) && savedResults.detectedLocation?.lat && savedResults.detectedLocation?.lon) {
+          hydrateLocationContext(savedResults.detectedLocation);
+        }
       } else {
         // If completed, but no saved data, something is wrong, force a re-detection
         detectLocation();
@@ -189,121 +616,35 @@ export default function LocationSpy() {
     loadData();
   }, [completedLocationInvestigation?.id, user?.email, userProfile, dataLoaded]); // Added userProfile to dependencies
 
-  // BOTÃO DE ACELERAR - SEM DEPENDÊNCIAS DESNECESSÁRIAS
   useEffect(() => {
     if (!activeLocationInvestigation) {
-      setShowAccelerateButton(false);
-      return;
-    }
-    
-    const progress = locationProgress; // Use local progress for this check
-    if (progress < 1 || progress >= 100) {
-      setShowAccelerateButton(false);
-      return;
-    }
-    
-    const storageKey = `accelerate_shown_${activeLocationInvestigation.id}`;
-    const alreadyShown = localStorage.getItem(storageKey) === 'true';
-    
-    if (alreadyShown) {
-      setShowAccelerateButton(true);
-    } else {
-      const timer = setTimeout(() => {
-        setShowAccelerateButton(true);
-        localStorage.setItem(storageKey, 'true');
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [activeLocationInvestigation?.id, locationProgress]); // Use locationProgress here
-
-  // ✅ PROGRESSO - 5 MIN (SALVA APENAS LOCALMENTE)
-  useEffect(() => {
-    if (!activeLocationInvestigation) {
-      setLocationProgress(0);
-      hasPlayedComplete.current = false; // Reset on new/no investigation
-      return;
-    }
-    
-    const localStorageKey = `location_progress_${activeLocationInvestigation.id}`;
-    const storedProgress = localStorage.getItem(localStorageKey);
-    
-    let currentProgress = activeLocationInvestigation.progress;
-    if (storedProgress !== null) {
-      const parsedStoredProgress = parseInt(storedProgress, 10);
-      // Ensure local progress never goes backwards from DB or stored value
-      currentProgress = Math.min(100, Math.max(currentProgress, parsedStoredProgress));
-    }
-    
-    setLocationProgress(currentProgress);
-
-    if (currentProgress >= 100) {
-      if (activeLocationInvestigation.status !== "completed") {
-        base44.entities.Investigation.update(activeLocationInvestigation.id, {
-          progress: 100,
-          status: "completed"
-        }).then(() => {
-          queryClient.invalidateQueries(['investigations', user?.email]);
-          if (!hasPlayedComplete.current) {
-            playSound('complete');
-            hasPlayedComplete.current = true;
-          }
-        });
-      }
+      hasPlayedComplete.current = false;
+      completionHandledRef.current = false;
       return;
     }
 
-    const interval = 3000; // 3 seconds per progress point
+    if (timerProgress >= 100 && !completionHandledRef.current) {
+      completionHandledRef.current = true;
 
-    const timer = setInterval(() => {
-      setLocationProgress(prev => {
-        const newProgress = Math.min(100, prev + 1);
-        
-        // ✅ SALVAR APENAS NO LOCALSTORAGE
-        localStorage.setItem(localStorageKey, newProgress.toString());
-        
-        // ✅ SALVAR NO BANCO APENAS AO COMPLETAR
-        if (newProgress >= 100) {
-          base44.entities.Investigation.update(activeLocationInvestigation.id, {
+      (async () => {
+        try {
+          await base44.entities.Investigation.update(activeLocationInvestigation.id, {
             progress: 100,
-            status: "completed"
-          }).then(() => {
-            queryClient.invalidateQueries(['investigations', user?.email]);
-            if (!hasPlayedComplete.current) {
-                playSound('complete');
-                hasPlayedComplete.current = true;
-            }
+            status: "completed",
           });
-          clearInterval(timer);
+
+          markCompleted({ service: "Localização", id: activeLocationInvestigation.id });
+          playSound('complete');
+          hasPlayedComplete.current = true;
+          queryClient.invalidateQueries({ queryKey: ['investigations', user?.email] });
+          await refetch();
+        } catch (error) {
+          console.error("Erro ao finalizar investigação de Localização:", error);
+          completionHandledRef.current = false;
         }
-        
-        return newProgress;
-      });
-    }, interval);
-    
-    return () => clearInterval(timer);
-  }, [activeLocationInvestigation?.id, activeLocationInvestigation?.progress, activeLocationInvestigation?.status, queryClient, user?.email]);
-
-  useEffect(() => {
-    if (!realTimeTracking || realTimeProgress >= 100) return;
-    
-    const interval = 2592000; // Original interval
-    
-    const timer = setInterval(() => {
-      setRealTimeProgress(prev => Math.min(100, prev + 1));
-    }, interval);
-    
-    return () => clearInterval(timer);
-  }, [realTimeTracking, realTimeProgress]);
-
-  useEffect(() => {
-    if (!realTimeTracking || realTimeProgress >= 100) return;
-    
-    const timer = setTimeout(() => {
-      setShowAccelerateRealTime(true);
-    }, 5000);
-    
-    return () => clearTimeout(timer);
-  }, [realTimeTracking, realTimeProgress]);
+      })();
+    }
+  }, [timerProgress, activeLocationInvestigation?.id, queryClient, refetch, user?.email]);
 
   const detectLocation = async () => {
     console.log("🌍 DETECTANDO LOCALIZAÇÃO...");
@@ -369,7 +710,8 @@ export default function LocationSpy() {
         if (location.cidade && location.lat && location.lon && !isNaN(location.lat) && !isNaN(location.lon)) {
           console.log(`✅ Localização detectada: ${location.cidade}, ${location.estado}`);
           setDetectedLocation(location);
-          await fetchNearbyLocations(location.lat, location.lon, location.cidade, location);
+          const contextExtras = await hydrateLocationContext(location);
+          await fetchNearbyLocations(location.lat, location.lon, location.cidade, location, contextExtras);
           return;
         } else {
           console.warn(`${api.name} retornou dados incompletos`);
@@ -388,10 +730,11 @@ export default function LocationSpy() {
       lon: -46.6333 
     };
     setDetectedLocation(fallback);
-    await fetchNearbyLocations(fallback.lat, fallback.lon, fallback.cidade, fallback);
+    const fallbackExtras = await hydrateLocationContext(fallback);
+    await fetchNearbyLocations(fallback.lat, fallback.lon, fallback.cidade, fallback, fallbackExtras);
   };
 
-  const fetchNearbyLocations = async (lat, lon, cidade, locationData) => {
+  const fetchNearbyLocations = async (lat, lon, cidade, locationData, contextExtras = {}) => {
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     try {
@@ -405,7 +748,9 @@ export default function LocationSpy() {
         `node["leisure"="park"]["name"](around:${radius},${lat},${lon});`,
         `node["shop"="mall"]["name"](around:${radius},${lat},${lon});`,
         `node["amenity"="bar"]["name"](around:${radius},${lat},${lon});`,
-        `node["amenity"="fuel"]["name"](around:${radius},${lat},${lon});`
+        `node["amenity"="fuel"]["name"](around:${radius},${lat},${lon});`,
+        `node["leisure"="fitness_centre"]["name"](around:${radius},${lat},${lon});`,
+        `node["tourism"="attraction"]["name"](around:${radius},${lat},${lon});`
       ];
 
       const overpassQuery = `[out:json][timeout:15];(${queries.join('')});out body 50;`;
@@ -432,14 +777,40 @@ export default function LocationSpy() {
             const hasCoords = place.lat && place.lon;
             return hasName && hasCoords;
           })
-          .map(place => ({
-            nome: place.tags.name,
-            lat: place.lat,
-            lon: place.lon,
-            tipo: place.tags.amenity || place.tags.shop || place.tags.leisure || "local",
-            suspicious: false,
-            needsGeocode: false
-          }));
+          .map(place => {
+            const tags = place.tags || {};
+            const cityTag =
+              tags['addr:city'] ||
+              tags.city ||
+              tags.town ||
+              tags.village ||
+              tags.municipality ||
+              cidade;
+
+            const street =
+              tags['addr:street'] ||
+              tags.street ||
+              tags.road ||
+              '';
+            const houseNumber =
+              tags['addr:housenumber'] ||
+              tags.housenumber ||
+              '';
+
+            return {
+              nome: tags.name,
+              lat: place.lat,
+              lon: place.lon,
+              tipo: tags.amenity || tags.shop || tags.leisure || tags.tourism || "local",
+              suspicious: false,
+              needsGeocode: false,
+              cidade: cityTag,
+              city: cityTag,
+              bairro: tags['addr:suburb'] || tags.suburb || null,
+              endereco: street ? `${street}${houseNumber ? `, ${houseNumber}` : ''}` : undefined,
+              categoria: tags.amenity || tags.shop || tags.leisure || tags.tourism || "outros",
+            };
+          });
 
         const uniquePlaces = [];
         const seenNames = new Set();
@@ -466,7 +837,7 @@ export default function LocationSpy() {
           setRealLocations(initialLocations);
           setLoadingLocations(false);
           
-          await saveToUserHistory(finalLocations, initialLocations, locationData);
+          await saveToUserHistory(finalLocations, initialLocations, locationData, contextExtras);
           return;
         }
       }
@@ -487,10 +858,10 @@ export default function LocationSpy() {
     setMotels(finalLocations);
     setLoadingLocations(false);
     
-    await saveToUserHistory(finalLocations, initialLocations, locationData);
+    await saveToUserHistory(finalLocations, initialLocations, locationData, contextExtras);
   };
 
-  const saveToUserHistory = async (finalLocations, initialLocations, locationData) => {
+  const saveToUserHistory = async (finalLocations, initialLocations, locationData, contextExtras = {}) => {
     if (!userProfile || !user) {
       console.warn("⚠️ UserProfile não encontrado");
       return;
@@ -503,7 +874,10 @@ export default function LocationSpy() {
       detectedLocation: locationData,
       motels: finalLocations,
       realLocations: initialLocations,
-      savedAt: new Date().toISOString()
+      savedAt: new Date().toISOString(),
+      locationDetails: contextExtras.details ?? locationDetails,
+      nearbyCities: contextExtras.cities ?? nearbyCities,
+      nearbyMotels: contextExtras.motels ?? nearbyMotels
     };
     
     const updatedHistory = { ...(userProfile.investigation_history || {}), 'Localização': resultsData };
@@ -519,34 +893,339 @@ export default function LocationSpy() {
     console.log("✅ SALVO NO HISTÓRICO!");
   };
 
-  const createFallbackLocationsWithAddresses = async (lat, lon, cidade) => {
-    const locations = [];
-    const totalLocations = 24; 
-    
-    for (let i = 0; i < totalLocations; i++) {
-      const randomLat = lat + (Math.random() - 0.5) * 0.08;
-      const randomLon = lon + (Math.random() - 0.5) * 0.08;
-      
-      locations.push({
-        lat: randomLat,
-        lon: randomLon,
-        tipo: "local",
-        suspicious: false,
-        needsGeocode: true,
-        nome: "Carregando endereço..."
+  const fallbackCategories = [
+    { tipo: 'shopping', label: 'Shopping center', searchTerm: 'shopping' },
+    { tipo: 'praça', label: 'Praça movimentada', searchTerm: 'praça' },
+    { tipo: 'restaurante', label: 'Restaurante reservado', searchTerm: 'restaurante' },
+    { tipo: 'hotel', label: 'Hotel executivo', searchTerm: 'hotel' },
+    { tipo: 'clinica', label: 'Clínica estética', searchTerm: 'clínica estética' },
+    { tipo: 'coworking', label: 'Coworking', searchTerm: 'coworking' },
+    { tipo: 'posto', label: 'Posto de combustível', searchTerm: 'posto 24h' },
+  ];
+
+  const computeSeed = (value) => {
+    if (typeof value === 'number') {
+      return value;
+    }
+    if (!value) return 0;
+    const str = String(value);
+    let hash = 0;
+    for (let i = 0; i < str.length; i += 1) {
+      hash = (hash << 5) - hash + str.charCodeAt(i);
+      hash |= 0; // Keep 32 bits
+    }
+    return hash || str.length;
+  };
+
+  const pickBySeed = (list, seedSource) => {
+    if (!list || list.length === 0) return null;
+    const seedValue = computeSeed(seedSource);
+    const normalized = Math.abs(Math.sin(seedValue) + seedValue * 0.0001);
+    return list[Math.floor(normalized * 1000) % list.length];
+  };
+
+  const hotspotNarratives = {
+    shopping: [
+      'Monitoramentos apontaram passagens rápidas pelo local em horários variados.',
+      'Deslocamentos até este ponto costumam acontecer próximos ao fim do expediente.',
+      'O aparelho costuma permanecer poucos minutos na área comercial antes de seguir viagem.',
+    ],
+    restaurante: [
+      'Chegadas registradas em turnos noturnos chamam atenção para o endereço.',
+      'O alvo costuma chegar ao restaurante e seguir para outra região logo em seguida.',
+      'Aparelho detectado em reservas desse endereço em diferentes dias da semana.',
+    ],
+    praça: [
+      'Espaço utilizado como ponto de parada antes de novos deslocamentos.',
+      'O aparelho costuma aguardar alguns minutos na praça e, então, seguir rota semelhante.',
+      'O local aparece como ponto intermediário em trajetos reiterados.',
+    ],
+    hotel: [
+      'Visita registrada recentemente com permanência acima da média para hospedagens rápidas.',
+      'Este endereço surge como destino quando o aparelho se desloca em horários incomuns.',
+      'Lugar monitorado por ser utilizado em deslocamentos noturnos recorrentes.',
+    ],
+    clinica: [
+      'Endereço cadastrado nas rotas mesmo fora de horários convencionais.',
+      'Visitas ao local aparecem como parte de trajetos breves e discretos.',
+      'Aparelho permanece por poucos minutos e retorna à mesma região de origem.',
+    ],
+    coworking: [
+      'Destinos relacionados a reuniões surgem como pontos de atenção na vigília.',
+      'Paradas em ambiente corporativo aparecem combinadas com deslocamentos mais longos.',
+      'Local é usado como ponte entre dois bairros em monitoramentos seguidos.',
+    ],
+    posto: [
+      'Parada rápida identificada em monitoramentos recentes de deslocamento.',
+      'O endereço é recorrente como ponto de abastecimento ou encontro breve.',
+      'Trânsito pelo posto acontece principalmente em rotas de madrugada.',
+    ],
+    default: [
+      'Deslocamento monitorado aparece como parte de rotas repetidas pelo alvo.',
+      'Endereço marcado como ponto de atenção devido à frequência detectada.',
+      'Registro incluído no relatório por surgir em diferentes investigações deste período.',
+    ],
+  };
+
+  const motelNarratives = [
+    'Estadia recente vinculada ao aparelho monitorado chamou atenção para este endereço.',
+    'Local aparece como destino preferencial em deslocamentos noturnos observados.',
+    'Registro do aparelho indica permanência superior ao padrão em suítes deste motel.',
+    'Deslocamentos até o motel ocorrem em horários reservados, reforçando o alerta.',
+    'O endereço figura entre os principais pontos de sigilo mapeados pelo painel.',
+  ];
+
+  const timeframeNarratives = [
+    'Última visita há poucos dias.',
+    'Visita recente registrada há algumas semanas.',
+    'Último deslocamento para este ponto ocorreu há cerca de 3 meses.',
+    'Registro antigo: última presença há bastante tempo.',
+    'Retorno detectado neste mês após período de silêncio.',
+    'Frequência reduzida: última passagem identificada no trimestre anterior.',
+    'Presença confirmada dias antes da suspeita inicial.',
+  ];
+
+  const hotspotMetaConfig = [
+    {
+      keywords: ['shopping', 'mall'],
+      icon: '🛍️',
+      badge: 'Frequência alta',
+      tone: 'bg-violet-50 border-violet-200 text-violet-700',
+      narrativeKey: 'shopping',
+    },
+    {
+      keywords: ['praça', 'park'],
+      icon: '🌳',
+      badge: 'Ponto recorrente',
+      tone: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+      narrativeKey: 'praça',
+    },
+    {
+      keywords: ['restaurant', 'restaurante', 'bar', 'cafe'],
+      icon: '🍷',
+      badge: 'Encontro noturno',
+      tone: 'bg-rose-50 border-rose-200 text-rose-700',
+      narrativeKey: 'restaurante',
+    },
+    {
+      keywords: ['hotel'],
+      icon: '🏨',
+      badge: 'Visita fora do padrão',
+      tone: 'bg-slate-50 border-slate-200 text-slate-700',
+      narrativeKey: 'hotel',
+    },
+    {
+      keywords: ['clinica', 'hospital'],
+      icon: '🩺',
+      badge: 'Agendamento incomum',
+      tone: 'bg-cyan-50 border-cyan-200 text-cyan-700',
+      narrativeKey: 'clinica',
+    },
+    {
+      keywords: ['coworking', 'office'],
+      icon: '💼',
+      badge: 'Reunião sigilosa',
+      tone: 'bg-blue-50 border-blue-200 text-blue-700',
+      narrativeKey: 'coworking',
+    },
+    {
+      keywords: ['posto', 'fuel'],
+      icon: '⛽️',
+      badge: 'Parada rápida',
+      tone: 'bg-amber-50 border-amber-200 text-amber-700',
+      narrativeKey: 'posto',
+    },
+  ];
+
+  const defaultHotspotMeta = {
+    icon: '📍',
+    badge: 'Monitoramento ativo',
+    tone: 'bg-gray-50 border-gray-200 text-gray-700',
+    narrativeKey: 'default',
+  };
+
+  const buildNarrativeForLocation = (location) => {
+    const meta = getLocationMeta(location);
+    const seedSource = `${location.nome || location.name || ''}_${location.lat || 0}_${location.lon || 0}`;
+    const key = meta.narrativeKey || 'default';
+    const pool =
+      key === 'motel'
+        ? motelNarratives
+        : hotspotNarratives[key] || hotspotNarratives.default;
+    const narrative = pickBySeed(pool, seedSource);
+    const timeframe = pickBySeed(timeframeNarratives, `${seedSource}_time`);
+    return { narrative, timeframe, meta };
+  };
+
+  const getLocationMeta = (location) => {
+    if (location?.categoria === 'motel' || location?.tipo === 'motel') {
+      return {
+        icon: '💋',
+        badge: (loc) => `Motel em ${loc?.city || loc?.cidade || detectedLocation?.cidade || 'cidade próxima'}`,
+        tone: 'bg-rose-50 border-rose-200 text-rose-700',
+        narrativeKey: 'motel',
+      };
+    }
+
+    const tipo = (location?.tipo || location?.categoria || '').toLowerCase();
+    const nome = (location?.nome || '').toLowerCase();
+
+    for (const meta of hotspotMetaConfig) {
+      if (meta.keywords.some((keyword) => tipo.includes(keyword) || nome.includes(keyword))) {
+        return meta;
+      }
+    }
+
+    return defaultHotspotMeta;
+  };
+
+  const searchPlacesWithNominatim = async (lat, lon, keyword, limit = 6) => {
+    const delta = 0.18; // ~20km
+    const viewbox = [
+      (lon - delta).toFixed(6),
+      (lat + delta).toFixed(6),
+      (lon + delta).toFixed(6),
+      (lat - delta).toFixed(6),
+    ].join(',');
+
+    const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=${limit}&bounded=1&viewbox=${viewbox}&extratags=1&accept-language=pt-BR&q=${encodeURIComponent(keyword)}`;
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'InstalkerPanel/1.0 (contact@instalker.app)',
+        },
       });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      const data = await response.json();
+      return data.map((item) => {
+        const addr = item.address || {};
+        const street =
+          addr.road ||
+          addr.pedestrian ||
+          addr.path ||
+          addr.street ||
+          addr.highway ||
+          null;
+        const houseNumber = addr.house_number || null;
+        const neighborhood =
+          addr.suburb ||
+          addr.neighbourhood ||
+          addr.quarter ||
+          addr.village ||
+          null;
+        const city =
+          addr.city ||
+          addr.town ||
+          addr.village ||
+          addr.municipality ||
+          addr.city_district ||
+          addr.state ||
+          null;
+
+        const primaryName = item.display_name
+          ? item.display_name.split(',')[0].trim()
+          : (item.namedetails?.name || null);
+
+        let addressLabel = '';
+        if (street) {
+          addressLabel = `${street}${houseNumber ? `, ${houseNumber}` : ''}`;
+        } else if (neighborhood) {
+          addressLabel = neighborhood;
+        } else if (city) {
+          addressLabel = city;
+        } else if (item.display_name) {
+          addressLabel = item.display_name.split(',').slice(1, 3).join(', ').trim();
+        }
+
+        return {
+          nome: primaryName || keyword,
+          lat: parseFloat(item.lat),
+          lon: parseFloat(item.lon),
+          endereco: addressLabel || null,
+          cidade: city,
+        };
+      });
+    } catch (error) {
+      console.warn(`Nominatim search falhou (${keyword}):`, error);
+      return [];
     }
-    
-    for (let i = 0; i < locations.length; i++) {
-      const loc = locations[i];
-      
-      if (i > 0) await new Promise(resolve => setTimeout(resolve, 500));
-      
-      const address = await getAddressFromCoords(loc.lat, loc.lon);
-      loc.nome = address;
+  };
+
+  const createFallbackLocationsWithAddresses = async (lat, lon, cidade) => {
+    const desiredCount = 24;
+    const collected = [];
+    const namesSeen = new Set();
+
+    for (const category of fallbackCategories) {
+      const searchTerm = category.searchTerm || `${category.label} ${cidade}`;
+      const results = await searchPlacesWithNominatim(lat, lon, searchTerm, 6);
+
+      for (const place of results) {
+        const key = `${(place.nome || '').toLowerCase()}|${place.lat.toFixed(5)}|${place.lon.toFixed(5)}`;
+        if (namesSeen.has(key)) continue;
+        namesSeen.add(key);
+
+        collected.push({
+          lat: place.lat,
+          lon: place.lon,
+          tipo: category.tipo,
+          categoria: category.tipo,
+          suspicious: false,
+          needsGeocode: false,
+          nome: place.nome || category.label,
+          nome: place.nome || category.label,
+          cidade: place.cidade || cidade,
+          endereco: place.endereco || null,
+        });
+
+        if (collected.length >= desiredCount) break;
+      }
+
+      if (collected.length >= desiredCount) break;
+      await new Promise((resolve) => setTimeout(resolve, 600));
     }
-    
-    return locations;
+
+    if (collected.length < desiredCount) {
+      console.warn('Fallback ainda insuficiente, completando com coordenadas aleatórias.');
+      const remaining = desiredCount - collected.length;
+      for (let i = 0; i < remaining; i++) {
+        const randomLat = lat + (Math.random() - 0.5) * 0.05;
+        const randomLon = lon + (Math.random() - 0.5) * 0.05;
+        const category = fallbackCategories[(collected.length + i) % fallbackCategories.length];
+
+        const geocode = await getAddressFromCoords(randomLat, randomLon);
+        collected.push({
+          lat: randomLat,
+          lon: randomLon,
+          tipo: category.tipo,
+          categoria: category.tipo,
+          suspicious: false,
+          needsGeocode: false,
+          nome: geocode?.name || category.label,
+          cidade: geocode?.city || cidade,
+          endereco: geocode?.address || null,
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    }
+
+    return collected.slice(0, desiredCount);
+  };
+
+  const getDirectionsUrl = (location) => {
+    if (!location) return '#';
+    const name = location.nome || location.name || location.title;
+    const city = location.city || location.cidade || locationDetails?.city || detectedLocation?.cidade;
+    if (name) {
+      const query = encodeURIComponent(`${name}${city ? ` ${city}` : ''}`);
+      return `https://www.google.com/maps/search/?api=1&query=${query}`;
+    }
+    if (location.lat && location.lon) {
+      return `https://www.google.com/maps/dir/?api=1&destination=${location.lat},${location.lon}`;
+    }
+    return '#';
   };
 
   const getAddressFromCoords = async (lat, lon) => {
@@ -568,35 +1247,50 @@ export default function LocationSpy() {
       const data = await response.json();
       
       const address = data.address || {};
-      const road = address.road || address.pedestrian || address.path || '';
+      const road = address.road || address.pedestrian || address.path || address.highway || '';
       const houseNumber = address.house_number || '';
-      const suburb = address.suburb || address.neighbourhood || '';
-      const city = address.city || address.town || data.address.city_district || data.address.state || data.address.country || ''; // Added more fallbacks for city
-      
+      const suburb = address.suburb || address.neighbourhood || address.quarter || '';
+      const city =
+        address.city ||
+        address.town ||
+        address.village ||
+        address.municipality ||
+        address.city_district ||
+        address.state ||
+        '';
+
+      const placeName = data.name || (data.display_name ? data.display_name.split(',')[0] : null);
+
+      let formattedAddress = '';
       if (road) {
-        return houseNumber ? `${road}, ${houseNumber}` : road;
+        formattedAddress = houseNumber ? `${road}, ${houseNumber}` : road;
       } else if (suburb) {
-        return suburb;
+        formattedAddress = suburb;
       } else if (city) {
-        return city;
+        formattedAddress = city;
+      } else if (placeName) {
+        formattedAddress = placeName;
       } else {
-        // FALLBACK COM ENDEREÇO GENÉRICO
         const streetNames = ["Rua Principal", "Avenida Central", "Rua das Flores"];
         const randomStreet = streetNames[Math.floor(Math.random() * streetNames.length)];
-        return `${randomStreet}, ${Math.floor(Math.random() * 1000)}`;
+        formattedAddress = `${randomStreet}, ${Math.floor(Math.random() * 1000)}`;
       }
+
+      return {
+        address: formattedAddress,
+        name: placeName,
+        city: city || null,
+      };
     } catch (error) {
       console.warn('Erro ao buscar endereço:', error);
-      // FALLBACK COM ENDEREÇO GENÉRICO
       const streetNames = ["Rua Principal", "Avenida Central", "Rua das Flores"];
       const randomStreet = streetNames[Math.floor(Math.random() * streetNames.length)];
-      return `${randomStreet}, ${Math.floor(Math.random() * 1000)}`;
+      return {
+        address: `${randomStreet}, ${Math.floor(Math.random() * 1000)}`,
+        name: null,
+        city: null,
+      };
     }
-  };
-
-  const openDirections = (location) => {
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${location.lat},${location.lon}`;
-    window.open(url, '_blank');
   };
 
   const handleStartInvestigation = async () => {
@@ -618,6 +1312,7 @@ export default function LocationSpy() {
     });
     // Update cache directly
     updateUserProfileCache({ credits: updatedCredits, xp: updatedXp });
+    updateLayoutProfileCache({ credits: updatedCredits, xp: updatedXp });
 
     const newInvestigation = await base44.entities.Investigation.create({
       service_name: "Localização",
@@ -625,12 +1320,17 @@ export default function LocationSpy() {
       status: "processing",
       progress: 1,
       estimated_days: 0,
-      is_accelerated: false
+      is_accelerated: false,
+      created_by: user?.email || ''
     });
-    
-    // Set initial location progress and store in local storage
-    setLocationProgress(1);
-    localStorage.setItem(`location_progress_${newInvestigation.id}`, '1');
+
+    ensureTimer({
+      service: "Localização",
+      id: newInvestigation.id,
+      durationMs: getDurationForInvestigation(newInvestigation),
+      startAt: Date.now(),
+    });
+    localStorage.removeItem(getUnlockStorageKey(newInvestigation.id));
 
     setCreditsSpent(60);
     setXpGained(30);
@@ -654,8 +1354,8 @@ export default function LocationSpy() {
       onConfirm: async () => {
         playSound('trash'); // ✅ SOM AO CONFIRMAR
         await base44.entities.Investigation.delete(activeLocationInvestigation.id);
-        localStorage.removeItem(`location_progress_${activeLocationInvestigation.id}`);
-        localStorage.removeItem(`accelerate_shown_${activeLocationInvestigation.id}`); // ✅ LIMPAR FLAG
+        resetTimer({ service: "Localização", id: activeLocationInvestigation.id });
+        localStorage.removeItem(`location_unlocks_${activeLocationInvestigation.id}`);
         await queryClient.invalidateQueries(['investigations', user?.email]);
         setShowConfirmModal(false);
         hasPlayedComplete.current = false;
@@ -665,35 +1365,57 @@ export default function LocationSpy() {
     setShowConfirmModal(true);
   };
 
+  const handleConfirmDeleteById = async (investigationId) => {
+    if (!investigationId) return;
+
+    try {
+      playSound('trash');
+      await base44.entities.Investigation.delete(investigationId);
+      resetTimer({ service: "Localização", id: investigationId });
+      localStorage.removeItem(`location_unlocks_${investigationId}`);
+      await queryClient.invalidateQueries(['investigations', user?.email]);
+
+      if (pendingDeleteIdRef.current === investigationId) {
+        pendingDeleteIdRef.current = null;
+      }
+
+      setDetectedLocation(null);
+      setMotels([]);
+      setRealLocations([]);
+      setShowMoreLocations(false);
+      setRealTimeTracking(false);
+      setRealTimeProgress(0);
+      setLocationDetails(null);
+      setNearbyCities([]);
+      setNearbyMotels([]);
+      setDataLoaded(false);
+      hasPlayedComplete.current = false;
+      if (realTimeIntervalRef.current) {
+        clearInterval(realTimeIntervalRef.current);
+        realTimeIntervalRef.current = null;
+      }
+
+      setShowConfirmModal(false);
+      navigate(createPageUrl("Dashboard"));
+    } catch (error) {
+      console.error("Erro ao apagar espionagem de Localização:", error);
+      setShowConfirmModal(false);
+    }
+  };
+
   const handleDeleteInvestigation = async () => {
     playSound('trash'); // ✅ SOM ADICIONADO AQUI
     if (!completedLocationInvestigation) return;
-    
+
+    pendingDeleteIdRef.current = completedLocationInvestigation.id;
+
     setConfirmModalConfig({
       title: "Apagar Espionagem?",
       message: "⚠️ Todos os dados desta investigação serão perdidos permanentemente, e os créditos gastos não serão reembolsados.",
       confirmText: "Sim, apagar",
       cancelText: "Cancelar",
       type: "danger",
-      onConfirm: async () => {
-        playSound('trash'); // ✅ SOM AO CONFIRMAR
-        await base44.entities.Investigation.delete(completedLocationInvestigation.id);
-        localStorage.removeItem(`location_progress_${completedLocationInvestigation.id}`);
-        localStorage.removeItem(`accelerate_shown_${completedLocationInvestigation.id}`); // ✅ LIMPAR FLAG
-        await queryClient.invalidateQueries(['investigations', user?.email]);
-        
-        setDetectedLocation(null);
-        setMotels([]);
-        setRealLocations([]);
-        setShowMoreLocations(false);
-        setRealTimeTracking(false);
-        setRealTimeProgress(0);
-        setDataLoaded(false);
-        hasPlayedComplete.current = false;
-        
-        setShowConfirmModal(false);
-        navigate(createPageUrl("Dashboard"));
-      }
+      onConfirm: () => handleConfirmDeleteById(completedLocationInvestigation.id)
     });
     setShowConfirmModal(true);
   };
@@ -709,49 +1431,38 @@ export default function LocationSpy() {
     }
 
     setAccelerating(true);
-    setShowAccelerateButton(false);
-
+ 
     const updatedCredits = userProfile.credits - 30;
     const updatedXp = userProfile.xp + 20;
-
+ 
     await base44.entities.UserProfile.update(userProfile.id, {
       credits: updatedCredits,
       xp: updatedXp
     });
     updateUserProfileCache({ credits: updatedCredits, xp: updatedXp });
-
-    // ✅ ACELERAR 55% (NÃO 17%)
-    const boost = 55;
-    const newLocalProgress = Math.min(100, locationProgress + boost);
-
-    const localStorageKey = `location_progress_${activeLocationInvestigation.id}`;
-    localStorage.setItem(localStorageKey, newLocalProgress.toString());
-    setLocationProgress(newLocalProgress);
+    updateLayoutProfileCache({ credits: updatedCredits, xp: updatedXp });
+ 
+    const boost = Math.floor(Math.random() * 11) + 20; // 20% - 30%
+    const newProgress = accelerateTimer(boost);
 
     await base44.entities.Investigation.update(activeLocationInvestigation.id, {
-      progress: Math.min(100, activeLocationInvestigation.progress + boost),
-      status: newLocalProgress >= 100 ? "completed" : "processing"
+      progress: newProgress,
+      status: newProgress >= 100 ? "completed" : "processing"
     });
-
+ 
     queryClient.setQueryData(['investigations', user?.email], (oldData) => {
       if (!oldData) return oldData;
       return oldData.map(inv => 
-        inv.id === activeLocationInvestigation.id 
-          ? { ...inv, progress: Math.min(100, inv.progress + boost), status: newLocalProgress >= 100 ? "completed" : "processing" }
-          : inv
+        inv.id === activeLocationInvestigation.id ? { ...inv, progress: newProgress, status: newProgress >= 100 ? "completed" : "processing" } : inv
       );
     });
-    
+ 
     setCreditsSpent(30);
     setXpGained(20);
     setShowCreditAlert(true);
     setTimeout(() => setShowCreditAlert(false), 3000);
 
     setAccelerating(false);
-    
-    if (newLocalProgress < 100) {
-      setTimeout(() => setShowAccelerateButton(true), 5000);
-    }
   };
 
   const handleBuyMoreLocations = async () => {
@@ -770,6 +1481,7 @@ export default function LocationSpy() {
     });
     // Update cache directly
     updateUserProfileCache({ credits: updatedCredits, xp: updatedXp });
+    updateLayoutProfileCache({ credits: updatedCredits, xp: updatedXp });
     
     setCreditsSpent(40);
     setXpGained(25);
@@ -777,6 +1489,8 @@ export default function LocationSpy() {
     setTimeout(() => setShowCreditAlert(false), 3000);
     
     setShowMoreLocations(true);
+    const currentId = activeLocationInvestigation?.id || completedLocationInvestigation?.id;
+    persistUnlockState(currentId, { showMoreLocations: true });
   };
 
   const handleBuyRealTime = async () => {
@@ -795,6 +1509,7 @@ export default function LocationSpy() {
     });
     // Update cache directly
     updateUserProfileCache({ credits: updatedCredits, xp: updatedXp });
+    updateLayoutProfileCache({ credits: updatedCredits, xp: updatedXp });
     
     setCreditsSpent(40);
     setXpGained(30);
@@ -803,35 +1518,50 @@ export default function LocationSpy() {
     
     setRealTimeTracking(true);
     setRealTimeProgress(1);
-    setShowAccelerateRealTime(false);
+    const currentId = activeLocationInvestigation?.id || completedLocationInvestigation?.id;
+    persistUnlockState(currentId, {
+      realTimeTracking: true,
+      realTimeProgress: 1,
+    });
   };
 
   const handleAccelerateRealTime = async () => {
-    if (!userProfile || userProfile.credits < 25) {
-      setAlertMessage("Créditos insuficientes! Você precisa de 25 créditos.");
+    if (!userProfile || userProfile.credits < 30) {
+      setAlertMessage("Créditos insuficientes! Você precisa de 30 créditos.");
       setShowAlertModal(true);
       return;
     }
 
-    const updatedCredits = userProfile.credits - 25;
-    const updatedXp = userProfile.xp + 20;
+    setAcceleratingRealTime(true);
 
-    await base44.entities.UserProfile.update(userProfile.id, {
-      credits: updatedCredits,
-      xp: updatedXp
-    });
-    // Update cache directly
-    updateUserProfileCache({ credits: updatedCredits, xp: updatedXp });
-    
-    const newProgress = Math.min(100, realTimeProgress + 17);
-    setRealTimeProgress(newProgress);
-    
-    setCreditsSpent(25);
-    setXpGained(20);
-    setShowCreditAlert(true);
-    setTimeout(() => setShowCreditAlert(false), 3000);
+    try {
+      const updatedCredits = userProfile.credits - 30;
+      const updatedXp = userProfile.xp + 25;
 
-    setShowAccelerateRealTime(false);
+      await base44.entities.UserProfile.update(userProfile.id, {
+        credits: updatedCredits,
+        xp: updatedXp
+      });
+      // Update cache directly
+      updateUserProfileCache({ credits: updatedCredits, xp: updatedXp });
+      updateLayoutProfileCache({ credits: updatedCredits, xp: updatedXp });
+
+      const boost = Math.floor(Math.random() * 11) + 20; // 20-30%
+      const newProgress = Math.min(100, Math.round((realTimeProgress || 0) + boost));
+      setRealTimeProgress(newProgress);
+
+      setCreditsSpent(30);
+      setXpGained(25);
+      setShowCreditAlert(true);
+      setTimeout(() => setShowCreditAlert(false), 3000);
+
+      const currentId = activeLocationInvestigation?.id || completedLocationInvestigation?.id;
+      persistUnlockState(currentId, {
+        realTimeProgress: newProgress,
+      });
+    } finally {
+      setAcceleratingRealTime(false);
+    }
   };
 
   const getSteps = (progress) => {
@@ -869,30 +1599,14 @@ export default function LocationSpy() {
   }
 
   if (activeLocationInvestigation) {
-    // Use locationProgress for rendering the active investigation UI
-    const progress = locationProgress;
-    const showAccelerate = progress >= 1 && progress < 100 && showAccelerateButton;
+    const progress = timerProgress;
+    const showAccelerate = showAccelerateButton;
     const steps = getSteps(progress);
     const estimatedTime = getEstimatedTime(progress);
 
     return (
+      <>
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            <h1 className="text-base font-bold text-gray-900">Localização</h1>
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
         <div className="w-full max-w-2xl mx-auto p-3">
           <Card className="bg-white border-0 shadow-lg p-4 mb-3">
             <div className="flex items-center gap-3 mb-4">
@@ -978,36 +1692,100 @@ export default function LocationSpy() {
           </div>
         )}
       </div>
+      <ConfirmModal
+        isOpen={showConfirmModal}
+        onConfirm={confirmModalConfig.onConfirm}
+        onCancel={() => setShowConfirmModal(false)}
+        title={confirmModalConfig.title}
+        message={confirmModalConfig.message}
+        confirmText={confirmModalConfig.confirmText}
+        cancelText={confirmModalConfig.cancelText}
+        type={confirmModalConfig.type}
+      />
+
+      <ConfirmModal
+        isOpen={showAlertModal}
+        onConfirm={() => {
+          setShowAlertModal(false);
+          navigate(createPageUrl("BuyCredits"));
+        }}
+        onCancel={() => setShowAlertModal(false)}
+        title="Créditos Insuficientes"
+        message={alertMessage}
+        confirmText="Comprar Créditos"
+        cancelText="Voltar"
+        type="default"
+      />
+      </>
     );
   }
 
   if (completedLocationInvestigation && detectedLocation) {
     const coordinates = [detectedLocation.lat, detectedLocation.lon];
-    const potentialLocationsToReveal = motels.slice(realLocations.length);
-    const extraLocations = showMoreLocations ? motels.slice(realLocations.length) : [];
+    const additionalHotspots = motels.slice(realLocations.length);
+    const potentialLocationsToReveal = additionalHotspots;
+    const displayedHotspots = showMoreLocations ? [...realLocations, ...additionalHotspots] : realLocations;
+    const displayedMotels = showMoreLocations ? nearbyMotels : nearbyMotels.slice(0, 2);
+    const additionalMotelsLocked = Math.max(0, nearbyMotels.length - displayedMotels.length);
+    const totalHiddenSpots = potentialLocationsToReveal.length + additionalMotelsLocked;
+    const isRealTimeComplete = realTimeTracking && realTimeProgress >= 100;
+
+    const cityInsightMap = new Map();
+    const registerCity = (cityName, category, loc) => {
+      if (!cityName) return;
+      const normalized = cityName.toLowerCase();
+      const entry = cityInsightMap.get(normalized) || { name: cityName, motels: 0, hotspots: 0, total: 0, distanceKm: null };
+      entry.total += 1;
+      if (category === 'motel') entry.motels += 1;
+      if (category === 'hotspot') entry.hotspots += 1;
+      if (loc && loc.lat && loc.lon && detectedLocation) {
+        const distance = calculateDistanceKm(detectedLocation.lat, detectedLocation.lon, loc.lat, loc.lon);
+        if (!entry.distanceKm || distance < entry.distanceKm) {
+          entry.distanceKm = distance;
+        }
+      }
+      cityInsightMap.set(normalized, entry);
+    };
+
+    [...realLocations, ...additionalHotspots].forEach((loc) =>
+      registerCity(loc.cidade || loc.city || detectedLocation.cidade, 'hotspot', loc)
+    );
+    nearbyMotels.forEach((motel) =>
+      registerCity(motel.city || detectedLocation.cidade, 'motel', motel)
+    );
+
+    let cityInsights = Array.from(cityInsightMap.values())
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 5)
+      .map((entry) => {
+        const summaryParts = [];
+        if (entry.motels > 0) summaryParts.push(`${entry.motels} ${entry.motels === 1 ? 'local suspeito' : 'locais suspeitos'}`);
+        if (entry.hotspots > 0) summaryParts.push(`${entry.hotspots} ${entry.hotspots === 1 ? 'deslocamento suspeito' : 'deslocamentos suspeitos'}`);
+        return {
+          name: entry.name,
+          summary: summaryParts.join(' • '),
+        };
+      });
+
+    if (cityInsights.length < 5 && nearbyCities?.length) {
+      const seenCities = new Set(cityInsights.map((city) => city.name.toLowerCase()));
+      for (const city of nearbyCities) {
+        if (seenCities.has(city.name.toLowerCase())) continue;
+        cityInsights.push({
+          name: city.name,
+          summary: `Monitoramento preventivo na área`,
+        });
+        seenCities.add(city.name.toLowerCase());
+        if (cityInsights.length >= 5) break;
+      }
+    }
 
     if (loadingLocations) {
       return (
         <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-          <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-            <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-              <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                Voltar
-              </Button>
-              <h1 className="text-base font-bold text-gray-900">Localização</h1>
-              {userProfile && (
-                <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                  <Zap className="w-3 h-3 text-orange-500" />
-                  <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
           <div className="w-full max-w-2xl mx-auto p-3">
             <div className="text-center mb-4">
-              <h1 className="text-2xl font-bold text-[#2D3748] mb-1">📍 Rastreamento GPS</h1>
+              <h1 className="text-2xl font-bold text-[#2D3748] mb-1"></h1>
             </div>
 
             <Card className="bg-white border-0 shadow-md p-6 mb-3">
@@ -1020,7 +1798,7 @@ export default function LocationSpy() {
                   </div>
                 </div>
 
-                <h3 className="text-lg font-bold text-gray-900 mb-2">🔍 Analisando Região</h3>
+                <h3 className="text-lg font-bold text-gray-900 mb-2">🔍 Analisando Localização</h3>
                 <p className="text-sm text-gray-600 text-center mb-4">
                   Mapeando locais frequentes próximos a {detectedLocation.cidade}...
                 </p>
@@ -1038,7 +1816,7 @@ export default function LocationSpy() {
                   </div>
                   <div className="flex items-center gap-2 text-xs text-gray-600">
                     <Loader2 className="w-4 h-4 text-orange-500 animate-spin" />
-                    <span>Identificando estabelecimentos próximos...</span>
+                    <span>Identificando locais suspeitos...</span>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-gray-600">
                     <Loader2 className="w-4 h-4 text-orange-500 animate-spin" />
@@ -1071,6 +1849,7 @@ export default function LocationSpy() {
     }
 
     return (
+      <>
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
         <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
           <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
@@ -1088,9 +1867,8 @@ export default function LocationSpy() {
           </div>
         </div>
 
-        <div className="w-full max-w-2xl mx-auto p-3">
-          <div className="text-center mb-4">
-            <h1 className="text-2xl font-bold text-[#2D3748] mb-1">📍 Rastreamento GPS</h1>
+        <div className="w-full max-w-2xl mx-auto p-4">
+          <div className="text-center mb-2">
           </div>
 
           <Card className="bg-white border-0 shadow-md p-4 mb-3">
@@ -1099,9 +1877,9 @@ export default function LocationSpy() {
                 <MapPin className="w-5 h-5 text-white" />
               </div>
               <div>
-                <p className="text-xs text-gray-500 mb-0.5">Localização Detectada</p>
+                <p className="text-xs text-gray-500 mb-0.5">Última localização detectada:</p>
                 <p className="text-base font-bold text-gray-900">
-                  📍 {detectedLocation.cidade}{detectedLocation.estado ? `, ${detectedLocation.estado}` : ''}
+                  {detectedLocation.cidade}{detectedLocation.estado ? `, ${detectedLocation.estado}` : ''}
                 </p>
               </div>
             </div>
@@ -1109,9 +1887,16 @@ export default function LocationSpy() {
 
           <Card className="bg-white border-0 shadow-md overflow-hidden mb-3 relative">
             <div className="h-64 relative">
-              <MapContainer center={coordinates} zoom={12} scrollWheelZoom={false} style={{ height: '100%', width: '100%' }} zoomControl={false}>
+              <MapContainer
+                center={coordinates}
+                zoom={12}
+                scrollWheelZoom={false}
+                style={{ height: '100%', width: '100%' }}
+                zoomControl={false}
+                attributionControl={false}
+              >
                 <MapUpdater center={coordinates} />
-                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap' />
+                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy;' />
                 {(showMoreLocations ? motels : realLocations).map((loc, idx) => (
                   <CircleMarker key={idx} center={[loc.lat, loc.lon]} radius={8} fillColor="#FF9800" fillOpacity={0.8} color="white" weight={2} />
                 ))}
@@ -1122,8 +1907,8 @@ export default function LocationSpy() {
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 text-[#FF6B55] flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-xs font-bold text-gray-900">⚠️ 24 localizações frequentes detectadas</p>
-                      <p className="text-[10px] text-gray-600 mt-0.5">🔒 Alguns detalhes ocultos</p>
+                      <p className="text-sm font-bold text-gray-900"> Localizações suspeitas encontradas</p>
+                      <p className="text-[12px] text-gray-600 mt-0.5">Veja alguns locais no mapa abaixo:</p>
                     </div>
                   </div>
                 </div>
@@ -1149,8 +1934,10 @@ export default function LocationSpy() {
           ) : (
             <Card className="bg-white border-0 shadow-md p-4 mb-3 relative overflow-hidden">
               <div className="absolute top-3 right-3 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                <p className="text-xs text-green-600 font-medium">ONLINE</p>
+                <div className={`w-2 h-2 rounded-full ${isRealTimeComplete ? 'bg-red-500' : 'bg-green-500 animate-pulse'}`}></div>
+                <p className={`text-xs font-medium ${isRealTimeComplete ? 'text-red-600' : 'text-green-600'}`}>
+                  {isRealTimeComplete ? 'OFFLINE' : 'ONLINE'}
+                </p>
               </div>
 
               <div className="mb-3">
@@ -1158,27 +1945,52 @@ export default function LocationSpy() {
                   <Eye className="w-5 h-5 text-green-600" />
                   <h3 className="text-sm font-bold text-gray-900">Rastreamento em Tempo Real</h3>
                 </div>
-                <p className="text-xs text-gray-600">Localizando GPS em tempo real, isso pode demorar um pouco...</p>
+                <p className="text-xs text-gray-600">
+                  {isRealTimeComplete
+                    ? 'O aparelho interrompeu o envio de coordenadas. Aguardando nova ativação.'
+                    : 'Localizando GPS em tempo real, isso pode demorar um pouco...'}
+                </p>
               </div>
 
-              <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
-                <div className="h-2 rounded-full transition-all duration-1000 bg-gradient-to-r from-green-500 to-emerald-500" style={{ width: `${realTimeProgress}%` }} />
-              </div>
+              {!isRealTimeComplete && (
+                <>
+                  <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+                    <div className="h-2 rounded-full transition-all duration-1000 bg-gradient-to-r from-green-500 to-emerald-500" style={{ width: `${realTimeProgress}%` }} />
+                  </div>
 
-              <p className="text-xs text-gray-600 mb-3">
-                Progresso: {realTimeProgress}% • Tempo estimado: {realTimeProgress >= 90 ? '< 1 dia' : realTimeProgress >= 70 ? '1 dia' : realTimeProgress >= 50 ? '2 dias' : '3 dias'}
-              </p>
+                  <p className="text-xs text-gray-600 mb-3">
+                    Progresso: {realTimeProgress}% • Tempo estimado: {realTimeProgress >= 90 ? '< 1 hora' : realTimeProgress >= 70 ? '2 horas' : realTimeProgress >= 50 ? '4 horas' : '6 horas'}
+                  </p>
+                </>
+              )}
 
-              {showAccelerateRealTime && realTimeProgress < 100 && (
-                <Button onClick={handleAccelerateRealTime} className="w-full h-10 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-semibold text-sm rounded-lg">
-                  <Zap className="w-4 h-4 mr-2" />
-                  Acelerar por 25 créditos
+              {realTimeProgress < 100 && (
+                <Button
+                  onClick={handleAccelerateRealTime}
+                  disabled={acceleratingRealTime}
+                  className="w-full h-10 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white font-semibold text-sm rounded-lg disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {acceleratingRealTime ? (
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Aplicando aceleração...
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Zap className="w-4 h-4" />
+                      Acelerar por 30 créditos
+                    </div>
+                  )}
                 </Button>
               )}
 
-              {realTimeProgress >= 100 && (
-                <div className="bg-green-50 border-l-4 border-green-500 p-3 rounded">
-                  <p className="text-xs text-green-900 font-bold">✓ Rastreamento concluído! Localização atual disponível.</p>
+              {isRealTimeComplete && (
+                <div className="bg-red-50 border-l-4 border-red-500 p-3 rounded">
+                  <p className="text-xs text-red-700 font-bold">Erro: Dispositivo offline ou GPS desativado.</p>
+                  <p className="text-[11px] text-red-600 mt-1">
+                    O aparelho espionado está com o GPS desativado ou sem conexão com a internet. A última localização rastreada foi em {detectedLocation?.cidade || 'área monitorada'}. <br></br>
+                    Assim que o aparelho reconectar à internet, o rastreamento retomará automaticamente.
+                  </p>
                 </div>
               )}
             </Card>
@@ -1186,38 +1998,132 @@ export default function LocationSpy() {
 
           {realLocations.length > 0 && (
             <Card className="bg-white border-0 shadow-md p-4 mb-3">
-              <h3 className="text-sm font-bold text-gray-900 mb-3">📍 Locais Frequentes ({realLocations.length})</h3>
-              
-              <div className="space-y-2 mb-3">
-                {realLocations.map((loc, index) => (
-                  <div key={index} className="rounded-lg border-2 bg-white border-gray-200 p-3">
-                    <p className="text-sm font-bold text-gray-900 mb-1">{loc.nome}</p>
-                    <p className="text-xs text-gray-600">📍 Local frequente</p>
-                  </div>
-                ))}
-
-                {showMoreLocations && extraLocations.map((loc, idx) => (
-                  <div key={`extra-${idx}`} className="rounded-lg border-2 bg-white border-gray-200 p-3">
-                    <p className="text-sm font-bold text-gray-900 mb-1">{loc.nome}</p>
-                    <p className="text-xs text-gray-600">📍 Local frequente</p>
-                  </div>
-                ))}
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-[17px] font-bold text-gray-900">📍 Localizações Encontradas</h3>
+                  <p className="text-[13px] text-gray-500">Locais suspeitos onde o alvo possa ter passado.</p>
+                </div>
+    
               </div>
 
-              {!showMoreLocations && potentialLocationsToReveal.length > 0 && (
-                <Button onClick={handleBuyMoreLocations} variant="outline" className="w-full h-auto border-2 border-orange-300 hover:bg-orange-50 font-semibold text-sm rounded-xl p-4">
+              <div className="space-y-3">
+                {displayedHotspots.map((loc, index) => {
+                  const { meta, narrative, timeframe } = buildNarrativeForLocation(loc);
+                  const badgeLabel = typeof meta.badge === 'function' ? meta.badge(loc) : meta.badge;
+                  const cityLabel = loc.cidade || loc.city || detectedLocation.cidade;
+      const distanceLabel = detectedLocation ? formatDistance(calculateDistanceKm(detectedLocation.lat, detectedLocation.lon, loc.lat, loc.lon)) : null;
+                  return (
+                    <div key={`hotspot-${index}`} className="rounded-xl border border-gray-200 p-3 shadow-sm hover:border-orange-200 transition">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xl">{meta.icon}</span>
+                            <p className="text-[15px] font-semibold text-gray-900">{loc.nome}</p>
+                          </div>
+                          {loc.endereco && (
+                            <p className="text-[13px] text-gray-500">{loc.endereco}</p>
+                          )}
+                          <p className="text-[13px] text-gray-500 mt-1">
+                            {cityLabel && <span className="font-semibold text-gray-700">{cityLabel}</span>}
+                            {distanceLabel && <span> </span>}
+                          </p>
+                          <p className="text-[13px] text-gray-500 mt-2">{meta.risk}</p>
+                        </div>
+                        <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[13px] font-semibold ${meta.tone}`}>
+                          {meta.icon} {badgeLabel}
+                        </div>
+                      </div>
+                      <p className="text-[13px] text-gray-600 mt-2">{narrative}</p>
+                      <p className="text-[12px] text-gray-400 mt-1">{timeframe}</p>
+                      <a
+                        href={getDirectionsUrl(loc)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 mt-3 text-xs font-medium text-gray-400 hover:text-gray-500"
+                      >
+                        <span className="text-sm">↗</span>
+                        Ver localização
+                      </a>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {displayedMotels.length > 0 && (
+                <div className="mt-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[17px] font-bold text-gray-900">🚨 Localizações ainda mais suspeitas</p>
+                    <span className="text-[13px] text-gray-500"></span>
+                  </div>
+                  {displayedMotels.map((motel, index) => {
+                    const { meta, narrative, timeframe } = buildNarrativeForLocation(motel);
+                    const badgeLabel = typeof meta.badge === 'function' ? meta.badge(motel) : meta.badge;
+                    const cityDisplay = motel.city || detectedLocation.cidade;
+                    return (
+                      <div key={`motel-${index}`} className="rounded-xl border border-rose-200 overflow-hidden shadow-sm">
+                        <div className="h-32 w-full overflow-hidden">
+                          <img src={motel.imageUrl} alt={motel.name} className="w-full h-full object-cover" loading="lazy" />
+                        </div>
+                        <div className="p-3 space-y-2 bg-rose-50/80">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-[15px] font-bold text-gray-900">{motel.name}</p>
+                              <p className="text-[13px] text-gray-600">{cityDisplay} • {motel.distance}</p>
+                            </div>
+                            <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[13px] font-semibold ${meta.tone}`}>
+                              {meta.icon} {badgeLabel}
+                            </div>
+                          </div>
+                          <p className="text-[13px] text-gray-600">{narrative}</p>
+                          <p className="text-[12px] text-gray-400">{timeframe}</p>
+                          <a
+                            href={getDirectionsUrl({ ...motel, nome: motel.name })}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-gray-400 hover:text-gray-500"
+                          >
+                            <span className="text-sm">↗</span>
+                            Ver localização
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {!showMoreLocations && totalHiddenSpots > 0 && (
+                <Button onClick={handleBuyMoreLocations} variant="outline" className="w-full h-auto border-2 border-orange-300 hover:bg-orange-50 font-semibold text-sm rounded-xl p-4 mt-4">
                   <div className="text-center w-full">
                     <div className="flex items-center justify-center gap-2 mb-2">
-                      <span className="text-lg">🔒</span>
-                      <p className="text-sm font-bold text-gray-900">{potentialLocationsToReveal.length} locais ocultos</p>
+                      <span className="text-[15px]"></span>
+                      <p className="text-sm font-bold text-gray-900">+ {totalHiddenSpots} locais suspeitos encontrados... </p>
                     </div>
-                    <p className="text-xs text-gray-600 mb-3">Mais endereços frequentes detectados</p>
                     <div className="flex items-center justify-center gap-2 text-orange-600">
-                      <span className="text-base font-bold">Revelar {potentialLocationsToReveal.length} lugares - 40 créditos</span>
+                      <span className="text-base font-bold">Desbloquear por 40 créditos</span>
                     </div>
                   </div>
                 </Button>
               )}
+            </Card>
+          )}
+
+          {cityInsights.length > 0 && (
+            <Card className="bg-white border-0 shadow-md p-4 mb-3">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-[17px] font-bold text-gray-900">📊 Dados por cidades</h3>
+              </div>
+              <div className="space-y-2">
+                {cityInsights.map((entry, idx) => (
+                  <div key={`city-${idx}`} className="rounded-xl border border-gray-200 p-3 flex items-start gap-3 bg-gray-50/60">
+                    <div className="text-xl leading-none pt-0.5">📍</div>
+                    <div>
+                      <p className="text-[15px] font-semibold text-gray-900">{entry.name}</p>
+                      <p className="text-[13px] text-gray-600">{entry.summary || 'Monitoramento ativo na região.'}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </Card>
           )}
 
@@ -1244,6 +2150,32 @@ export default function LocationSpy() {
         </div>
       )}
       </div>
+
+      <ConfirmModal
+        isOpen={showConfirmModal}
+        onConfirm={confirmModalConfig.onConfirm}
+        onCancel={() => setShowConfirmModal(false)}
+        title={confirmModalConfig.title}
+        message={confirmModalConfig.message}
+        confirmText={confirmModalConfig.confirmText}
+        cancelText={confirmModalConfig.cancelText}
+        type={confirmModalConfig.type}
+      />
+
+      <ConfirmModal
+        isOpen={showAlertModal}
+        onConfirm={() => {
+          setShowAlertModal(false);
+          navigate(createPageUrl("BuyCredits"));
+        }}
+        onCancel={() => setShowAlertModal(false)}
+        title="Créditos Insuficientes"
+        message={alertMessage}
+        confirmText="Comprar Créditos"
+        cancelText="Voltar"
+        type="default"
+      />
+      </>
     );
   }
 
@@ -1266,43 +2198,71 @@ export default function LocationSpy() {
       </div>
 
       <div className="w-full max-w-2xl mx-auto p-3">
-        <Card className="bg-white border-0 shadow-lg p-6">
-          <div className="text-center mb-6">
-            <div className="w-16 h-16 rounded-2xl bg-orange-100 flex items-center justify-center mx-auto mb-4 shadow-sm">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#FF6B55] to-[#FF8F7A] flex items-center justify-center">
-                <MapPin className="w-6 h-6 text-white" />
+        <Card className="relative overflow-hidden border-0 shadow-xl bg-gradient-to-br from-[#FFE7D7] via-white to-[#FFDCCA] p-6 rounded-3xl">
+          <div className="absolute -right-20 -top-24 w-52 h-52 bg-[#FFB59E]/40 rounded-full blur-3xl"></div>
+          <div className="absolute -left-16 bottom-0 w-44 h-44 bg-[#FFE0D2]/60 rounded-full blur-3xl"></div>
+
+          <div className="relative z-10 space-y-5">
+            <div className="flex items-start gap-3">
+              <div className="w-14 h-14 rounded-2xl bg-white shadow-lg flex items-center justify-center">
+                <MapPin className="w-7 h-7 text-[#FF6B55]" />
+              </div>
+              <div className="flex-1">
+                <h1 className="text-xl font-extrabold text-gray-900 tracking-tight leading-tight">
+                  Veja por onde ele(a) anda.
+                </h1>
+                <p className="text-sm text-gray-600 leading-relaxed"> Localize o celular do alvo em tempo real
+
+                 
+                </p>
               </div>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">📍 Rastreamento GPS</h1>
-            <p className="text-sm text-gray-600">Localize o celular do alvo em tempo real</p>
-          </div>
 
-          <div className="bg-orange-50 border-l-4 border-[#FF6B55] p-4 rounded-r mb-6">
-            <p className="text-xs text-gray-700 leading-relaxed">
-              <span className="font-bold text-[#FF6B55]">🔍 Como funciona:</span><br/>
-              Nossa tecnologia rastreia o celular do alvo e mapeia locais frequentes, pontos suspeitos e padrões de movimento.
-            </p>
-          </div>
+            <div className="space-y-3">
+              <div className="rounded-xl bg-white/95 border border-[#FFB59E]/40 p-5 shadow-sm space-y-4">
+                <div>
+                  <p className="text-[13px] font-bold text-[#FF6B55] flex items-center gap-2">
+                    <span>🔍</span> Como funciona
+                  </p>
+                  <p className="mt-2 text-[13px] text-gray-700 leading-relaxed">
+                    Nossa tecnologia rastreia o celular do alvo e mapeia locais frequentes, pontos suspeitos e padrões de movimento.
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[13px] font-bold text-[#FF6B55] flex items-center gap-2">
+                    <span>🔒</span> Confidencial para você
+                  </p>
+                  <p className="mt-2 text-[13px] text-gray-700 leading-relaxed">
+                    Nenhum alerta é enviado para o aparelho monitorado. Você recebe todo o relatório aqui, no painel.
+                  </p>
+                </div>
+              </div>
 
-          <Button onClick={handleStartInvestigation} disabled={loading} className="w-full h-14 bg-gradient-to-r from-[#FF6B55] to-[#FF8F7A] hover:from-[#FF5544] hover:to-[#FF7E69] text-white font-bold text-base rounded-xl shadow-lg">
-            {loading ? (
-              <div className="flex items-center gap-2">
-                <Loader2 className="w-5 h-5 animate-spin" />
-                Iniciando...
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <MapPin className="w-5 h-5" />
-                Iniciar Rastreamento - 60 Créditos
-              </div>
+            </div>
+
+            <Button
+              onClick={handleStartInvestigation}
+              disabled={loading}
+              className="w-full h-14 bg-gradient-to-r from-[#FF6B55] to-[#FF8F7A] hover:from-[#FF5544] hover:to-[#FF7E69] text-white font-bold text-base rounded-xl shadow-lg"
+            >
+              {loading ? (
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Preparando monitoramento...
+                </div>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-5 h-5" />
+                  Iniciar Rastreamento - 60 créditos
+                </div>
+              )}
+            </Button>
+
+            {userProfile && (
+              <p className="text-xs text-center text-gray-600">
+              </p>
             )}
-          </Button>
-
-          {userProfile && (
-            <p className="text-xs text-center text-gray-600 mt-4">
-              Você tem <span className="font-bold text-[#FF6B55]">{userProfile.credits}</span> créditos disponíveis
-            </p>
-          )}
+          </div>
         </Card>
       </div>
 
@@ -1348,3 +2308,4 @@ export default function LocationSpy() {
     </div>
   );
 }
+
