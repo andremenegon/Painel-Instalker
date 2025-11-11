@@ -39,18 +39,17 @@ export default function InstagramSpy() {
     retry: 0, // ✅ ZERO RETRIES
   });
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity, // ✅ CACHE INFINITO
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false, // ✅ DESATIVADO
-    refetchOnMount: false, // ✅ DESATIVADO
-    retry: 0, // ✅ ZERO RETRIES
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [], refetch } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -421,9 +420,9 @@ export default function InstagramSpy() {
     const estimatedTime = getEstimatedTime(progress);
 
     mainContent = (
-      <div className="min-h-screen bg-gradient-to-br from-[#FFE5DC] via-[#FFEEE8] to-[#FFF5F2]">
+      <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
         <div className="w-full max-w-2xl mx-auto p-3">
-          <Card className="bg-white border border-[#FFD9CB] shadow-lg p-4 mb-3 relative overflow-hidden">
+          <Card className="bg-white border-0 shadow-lg p-4 mb-3 relative overflow-hidden">
 
             {/* Confete quando completo */}
             {progress === 100 && (
@@ -451,7 +450,7 @@ export default function InstagramSpy() {
                 <h3 className="font-bold text-gray-900 truncate">@{activeInstagramInvestigation.target_username}</h3>
                 <p className="text-xs text-gray-600">Analisando perfil...</p>
               </div>
-              <Badge className="bg-[#FFE8E2] text-[#FF6B4A] border-0 flex-shrink-0">
+              <Badge className="bg-orange-100 text-orange-700 border-0 flex-shrink-0">
                 {progress >= 100 ? '✔ Completo' : `${progress}%`}
               </Badge>
             </div>
@@ -496,8 +495,8 @@ export default function InstagramSpy() {
               ))}
 
               {progress < 100 && (
-                <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded mt-3">
-                  <p className="text-xs text-blue-900">
+                <div className="bg-orange-50 border-l-4 border-orange-500 p-3 rounded mt-3">
+                  <p className="text-xs text-orange-900">
                     <span className="font-bold">⏳ Análise em andamento</span><br/>
                     Progresso: {progress}% • Tempo estimado: {estimatedTime}
                   </p>
@@ -525,7 +524,7 @@ export default function InstagramSpy() {
           </Card>
 
           {showAccelerateButton && (
-            <div className="bg-gradient-to-br from-[#FFEAE1] to-[#FFF4F0] rounded-xl p-3 shadow-sm border border-[#FFD6C8]">
+            <div className="bg-gradient-to-br from-[#FFF5ED] to-[#FFEEE0] rounded-xl p-3 shadow-sm border border-orange-200">
               <p className="text-center text-gray-600 text-xs mb-2">
                 A análise está demorando...
               </p>
@@ -569,7 +568,7 @@ export default function InstagramSpy() {
     );
   } else {
     mainContent = (
-      <div className="min-h-screen bg-gradient-to-br from-[#FFE5DC] via-[#FFEEE8] to-[#FFF5F2]">
+      <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
         <div className="w-full max-w-2xl mx-auto p-3">
           <Card className="bg-white border border-[#FFD9CB] shadow-lg p-6 overflow-hidden">
             <div className="absolute -top-12 -right-10 w-32 h-32 bg-[#FFE7DC] rounded-full opacity-60" aria-hidden="true" />

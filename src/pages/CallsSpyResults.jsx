@@ -76,18 +76,17 @@ export default function CallsSpyResults() {
     retry: 0,
   });
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity, // ✅ NUNCA ATUALIZA AUTOMATICAMENTE
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false, // ✅ DESATIVADO
-    refetchOnMount: false, // ✅ DESATIVADO
-    retry: 0,
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [] } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -134,21 +133,46 @@ export default function CallsSpyResults() {
     ];
 
     const suspiciousTranscripts = [
-      "Oi amor, consegue falar agora ou tem alguém aí?",
-      "E aí, tá tranquilo pra conversar? Ou tem gente perto?",
-      "Opa, pode falar? Ou tá ocupado aí?",
-      "Oi meu bem, liga pra mim quando puder, preciso te ver...",
-      "Consegue sair hoje? Tô com saudade demais...",
-      "Oi delícia, tá sozinho ou tem gente em casa?",
-      "E aí, conseguiu resolver aquela parada? A gente se vê?",
-      "Opa amor, me liga quando der, tenho novidade pra te contar",
-      "Tá aí? Queria muito te ver hoje, será que rola?",
-      "Oi vida, consegue fugir um pouquinho? Tô precisando de você",
-      "E aí, pode falar ou tá complicado aí agora?",
-      "Opa, liga quando tiver sozinho, preciso falar contigo",
-      "Amor, consegue me buscar hoje? Quero te ver...",
-      "Oi, tô pensando muito em você... consegue sair?",
-      "E aí meu bem, aquela história continua? A gente se vê?"
+      {
+        preview: "Alô? Consegue falar ou tem alguém perto?",
+        full: "[Contato]: Alô? Consegue falar ou tem alguém perto?\n[Alvo]: Oi amor, posso sim, tô sozinho no carro.\n[Contato]: Que bom... tô morrendo de saudade. Quando a gente se vê?\n[Alvo]: Hoje não dá, amanhã eu invento alguma coisa.\n[Contato]: Tá bom, mas não me deixa esperando de novo, viu?"
+      },
+      {
+        preview: "Oi amor, saudade de gozar com você...",
+        full: "[Contato]: Oi amor, saudade de gozar com você.\n[Alvo]: Nossa, também tô com saudade... aquela vez foi muito intensa.\n[Contato]: Demais! Quando a gente repete?\n[Alvo]: Semana que vem eu consigo sair. Vamos naquele motel?\n[Contato]: Sim! Já tô contando os dias..."
+      },
+      {
+        preview: "Oi delícia, viu aquele vídeo que mandei?",
+        full: "[Contato]: Oi delícia, viu aquele vídeo que mandei?\n[Alvo]: Vi sim... caraca, que absurdo!\n[Contato]: Gostou então? Posso fazer ao vivo pra você.\n[Alvo]: Quando? Tô doido pra isso.\n[Contato]: Hoje mesmo, se você vier aqui.\n[Alvo]: Vou aí depois do trabalho então."
+      },
+      {
+        preview: "Alô amor, conseguiu inventar uma desculpa?",
+        full: "[Contato]: Alô amor, conseguiu inventar uma desculpa?\n[Alvo]: Consegui, disse que vou na casa do meu primo.\n[Contato]: Perfeito! Me busca ali no posto então?\n[Alvo]: Busco sim. Que horas?\n[Contato]: Umas 20h pode ser?\n[Alvo]: Pode, tô ansioso já."
+      },
+      {
+        preview: "Oi, tô excitado lembrando daquele dia...",
+        full: "[Contato]: Oi, tô excitado lembrando daquele dia no carro.\n[Alvo]: Eu também! Que loucura a gente fez, né?\n[Contato]: Demais... quero fazer de novo.\n[Alvo]: Vamos com mais calma dessa vez, num lugar melhor.\n[Contato]: Então aluga um quarto? Eu pago metade.\n[Alvo]: Fechado, semana que vem a gente vai."
+      },
+      {
+        preview: "Alô amor, acabei de sair do banho...",
+        full: "[Contato]: Alô amor, acabei de sair do banho.\n[Alvo]: E por que tá me ligando? Haha\n[Contato]: Porque pensei em você... tô aqui sem roupa.\n[Alvo]: Para com isso que eu vou ficar louco!\n[Contato]: Então vem aqui resolver.\n[Alvo]: Vou sim, daqui meia hora eu tô aí."
+      },
+      {
+        preview: "Alô, liga de outro número que pode aparecer...",
+        full: "[Contato]: Alô, liga de outro número que pode aparecer na conta.\n[Alvo]: Sério? Tá sendo conferido?\n[Contato]: Tô desconfiado... melhor não arriscar.\n[Alvo]: Tá certo. Apago o histórico também?\n[Contato]: Sim, apaga tudo. A gente se encontra onde sempre.\n[Alvo]: Combinado."
+      },
+      {
+        preview: "Oi, me busca ali no lugar combinado?",
+        full: "[Contato]: Oi, me busca ali no lugar combinado?\n[Alvo]: Que horas você vai estar lá?\n[Contato]: Daqui uns 15 minutos eu chego.\n[Alvo]: Beleza, vou te pegar e a gente vai direto.\n[Contato]: Pro motel?\n[Alvo]: Isso, já até reservei o quarto."
+      },
+      {
+        preview: "Alô amor, tô sem limites hoje...",
+        full: "[Contato]: Alô amor, tô sem limites hoje.\n[Alvo]: Como assim?\n[Contato]: Pode fazer o que quiser comigo.\n[Alvo]: Caramba... agora fiquei ansioso.\n[Contato]: Então vem logo que não aguento esperar.\n[Alvo]: Já tô saindo daqui."
+      },
+      {
+        preview: "Alô, pega a chave embaixo do vaso...",
+        full: "[Contato]: Alô, pega a chave embaixo do vaso e entra.\n[Alvo]: Você já tá aí dentro?\n[Contato]: Tô sim, te esperando no quarto.\n[Alvo]: Vou entrar sem fazer barulho então.\n[Contato]: Isso, e prepara o coração. Tenho surpresa.\n[Alvo]: Agora fiquei curioso..."
+      }
     ];
 
     const spamTranscripts = [
@@ -462,75 +486,93 @@ export default function CallsSpyResults() {
       </div>
 
       <div className="w-full max-w-3xl mx-auto p-3">
-        <div className="bg-gradient-to-r from-orange-50 to-orange-100 border border-orange-200 rounded-xl p-3 mb-3">
-          <p className="text-sm font-bold text-orange-900 mb-1">📞 Histórico Completo</p>
-          <p className="text-xs text-orange-700">Mostrando {visibleCalls} de {calls.length} chamadas</p>
-          <p className="text-xs text-orange-600 font-bold mt-1">🎯 DDD do alvo: ({targetDDD})</p>
+        <div className="bg-gradient-to-r from-orange-50 via-orange-50 to-orange-100 border border-orange-200 rounded-2xl p-4 mb-4 shadow-sm animate-in fade-in duration-500">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center">
+              <Phone className="w-5 h-5 text-orange-600" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-bold text-orange-900">Histórico Completo</p>
+              <p className="text-xs text-orange-700">Mostrando {visibleCalls} de {calls.length} chamadas</p>
+            </div>
+          </div>
+          <div className="bg-orange-100 rounded-lg px-3 py-2 mt-2">
+            <p className="text-xs text-orange-800"><span className="font-bold">🎯 DDD do alvo:</span> ({targetDDD})</p>
+          </div>
         </div>
 
-        <div className="space-y-2">
-          {calls.slice(0, visibleCalls).map((call) => {
+        <div className="space-y-3">
+          {calls.slice(0, visibleCalls).map((call, index) => {
             const Icon = call.type === "incoming" ? PhoneIncoming : PhoneOutgoing;
             const typeColor = call.type === "incoming" ? "text-green-600" : "text-blue-600";
             const typeBg = call.type === "incoming" ? "bg-green-100" : "bg-blue-100";
             const isTranscriptUnlocked = unlockedTranscripts.includes(call.id);
             
             return (
-              <Card key={call.id} className="bg-white border-0 shadow-sm hover:shadow-md transition-shadow">
-                <div className="p-3">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className={`w-10 h-10 rounded-full ${typeBg} flex items-center justify-center flex-shrink-0`}>
-                      <Icon className={`w-5 h-5 ${typeColor}`} />
+              <Card 
+                key={call.id} 
+                className="bg-white border border-gray-100 shadow-sm hover:shadow-lg hover:scale-[1.01] transition-all duration-300 animate-in fade-in-0 slide-in-from-bottom-3"
+                style={{ animationDelay: `${index * 50}ms` }}
+              >
+                <div className="p-4">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={`w-12 h-12 rounded-full ${typeBg} flex items-center justify-center flex-shrink-0 transition-transform duration-300 hover:scale-110`}>
+                      <Icon className={`w-6 h-6 ${typeColor}`} />
                     </div>
                     
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <h3 className="font-bold text-sm text-gray-900">{maskPhone(call.phone)}</h3>
-                        <Badge className={`${typeBg} ${typeColor} border-0 text-[10px] px-1.5 py-0`}>
+                      <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                        <h3 className="font-bold text-base text-gray-900">{maskPhone(call.phone)}</h3>
+                        <Badge className={`${typeBg} ${typeColor} border-0 text-[10px] px-2 py-0.5 font-semibold`}>
                           {call.type === "incoming" ? "Recebida" : "Realizada"}
                         </Badge>
                         {call.isEmpresa && (
-                          <Badge className="bg-gray-100 text-gray-700 border-0 text-[10px] px-1.5 py-0">EMPRESA</Badge>
+                          <Badge className="bg-gray-100 text-gray-700 border-0 text-[10px] px-2 py-0.5 font-semibold">EMPRESA</Badge>
                         )}
                         {call.isSameDDD && (
-                          <Badge className="bg-orange-100 text-orange-700 border-0 text-[10px] px-1.5 py-0">MESMO DDD</Badge>
+                          <Badge className="bg-orange-100 text-orange-700 border border-orange-200 text-[10px] px-2 py-0.5 font-semibold">MESMO DDD</Badge>
                         )}
                       </div>
                       <div className="flex items-center gap-3 text-xs text-gray-500">
-                        <div className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
+                        <div className="flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5" />
                           <span>{call.date} • {call.time}</span>
                         </div>
                         <span>•</span>
-                        <span className="font-medium">{formatDuration(call.duration)}</span>
+                        <span className="font-semibold text-gray-700">{formatDuration(call.duration)}</span>
                       </div>
                     </div>
                   </div>
 
                   {call.transcript && (
-                    <div className="mt-2 bg-blue-50 border-blue-200 border rounded-lg p-2">
+                    <div className="mt-3 bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-3 transition-all duration-300 hover:shadow-md">
                       <div className="flex items-start gap-2">
-                        <AudioLines className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                          <AudioLines className="w-4 h-4 text-blue-600" />
+                        </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-bold text-blue-900 mb-1">
+                          <p className="text-xs font-bold text-blue-900 mb-2 flex items-center gap-1">
+                            <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
                             Transcrição de áudio disponível
                           </p>
                           {isTranscriptUnlocked ? (
-                            <div>
-                              <p className="text-xs text-gray-700 mb-1">{call.transcript}</p>
-                              <p className="text-[10px] text-gray-500 italic">
-                                {call.isSpam ? '... ligação encerrada rapidamente' : '... e mais 3 minutos de conversa'}
+                            <div className="animate-in fade-in-50 slide-in-from-top-2 duration-500">
+                              <p className="text-xs text-gray-800 mb-2 whitespace-pre-line leading-relaxed bg-white rounded-lg p-3 border border-blue-100">{typeof call.transcript === 'object' ? call.transcript.full : call.transcript}</p>
+                              <p className="text-[10px] text-gray-500 italic pl-1">
+                                {call.isSpam 
+                                  ? '... ligação encerrada rapidamente' 
+                                  : `... e mais ${Math.floor(call.duration / 60)} minutos de conversa`}
                               </p>
                             </div>
                           ) : (
                             <div>
-                              <p className="text-xs text-gray-600 mb-2">{call.transcript.slice(0, 25) + "..."}</p>
+                              <p className="text-xs text-gray-700 mb-3 font-medium leading-relaxed">{typeof call.transcript === 'object' ? call.transcript.preview : call.transcript}</p>
                               <Button
                                 onClick={() => handleUnlockTranscript(call.id)}
                                 size="sm"
-                                className="h-7 bg-gradient-to-r from-blue-400 to-blue-500 hover:from-blue-500 hover:to-blue-600 text-white text-[10px] px-2"
+                                className="h-8 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white text-[11px] px-3 rounded-lg shadow-sm hover:shadow-md transition-all duration-300 hover:scale-105"
                               >
-                                <Lock className="w-3 h-3 mr-1" />
+                                <Lock className="w-3.5 h-3.5 mr-1.5" />
                                 Ver transcrição completa - 30 créditos
                               </Button>
                             </div>
@@ -548,9 +590,9 @@ export default function CallsSpyResults() {
         {visibleCalls < calls.length && (
           <Button
             onClick={handleLoadMore}
-            className="w-full h-11 mt-3 bg-gradient-to-r from-orange-400 to-orange-500 hover:from-orange-500 hover:to-orange-600 text-white font-semibold rounded-xl"
+            className="w-full h-12 mt-4 bg-gradient-to-r from-orange-400 via-orange-500 to-orange-600 hover:from-orange-500 hover:via-orange-600 hover:to-orange-700 text-white font-bold rounded-xl shadow-md hover:shadow-lg transition-all duration-300 hover:scale-[1.02] animate-in fade-in-0 slide-in-from-bottom-3"
           >
-            <Zap className="w-4 h-4 mr-2" />
+            <Zap className="w-5 h-5 mr-2 animate-pulse" />
             Ver mais {nextBatchSize} chamadas - {nextBatchCredits} créditos
           </Button>
         )}
@@ -558,7 +600,7 @@ export default function CallsSpyResults() {
         <Button 
           onClick={handleDeleteInvestigation}
           variant="outline" 
-          className="w-full h-10 mt-3 border border-red-200 text-red-600 hover:bg-red-50 font-medium text-sm rounded-xl"
+          className="w-full h-11 mt-3 border-2 border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300 font-semibold text-sm rounded-xl transition-all duration-300 hover:scale-[1.01] hover:shadow-md"
         >
           <Trash2 className="w-4 h-4 mr-2" />
           Apagar essa investigação

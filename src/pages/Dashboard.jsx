@@ -25,7 +25,17 @@ const playSound = (type) => {
     oscillator.connect(gainNode);
     gainNode.connect(audioContext.destination);
     
-    if (type === 'click') {
+    if (type === 'celebration') {
+      // 🎉 Som de comemoração/presente - sequência de notas alegres
+      oscillator.frequency.setValueAtTime(523, audioContext.currentTime); // C
+      oscillator.frequency.setValueAtTime(659, audioContext.currentTime + 0.1); // E
+      oscillator.frequency.setValueAtTime(784, audioContext.currentTime + 0.2); // G
+      oscillator.frequency.setValueAtTime(1047, audioContext.currentTime + 0.3); // C alto
+      gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.6);
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.6);
+    } else if (type === 'click') {
       oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
       gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.05);
@@ -108,16 +118,16 @@ export default function Dashboard() {
     retry: 0,
   });
 
-  // ✅ USER PROFILE - ATUALIZA APENAS COM invalidateQueries MANUAL
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity, // ✅ NUNCA ATUALIZA AUTOMATICAMENTE
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
-    retry: 0, // ✅ ZERO RETRIES
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
 
   useEffect(() => {
@@ -131,8 +141,6 @@ export default function Dashboard() {
       localStorage.removeItem('pending_level_up');
     }
   }, []);
-
-  const userProfile = useMemo(() => userProfiles[0], [userProfiles]);
 
   const investigatingServiceNames = useMemo(() => 
     investigations
@@ -487,56 +495,99 @@ export default function Dashboard() {
       )}
 
       {showLevelUp && levelUpData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 animate-in fade-in duration-300">
-          <div className="bg-gradient-to-br from-yellow-50 to-orange-50 rounded-3xl shadow-2xl w-full max-w-sm p-6 relative animate-in zoom-in duration-500">
-            <div className="absolute -top-12 left-1/2 -translate-x-1/2">
-              <div className="w-24 h-24 rounded-full bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center shadow-2xl animate-bounce">
-                <Trophy className="w-12 h-12 text-white" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+          <div className="bg-gradient-to-br from-yellow-50 via-orange-50 to-pink-50 rounded-2xl sm:rounded-3xl shadow-2xl w-full max-w-[340px] sm:max-w-md p-4 sm:p-8 relative animate-in zoom-in duration-500 border-2 sm:border-4 border-yellow-300">
+            {/* Troféu animado - MENOR NO MOBILE */}
+            <div className="absolute -top-10 sm:-top-16 left-1/2 -translate-x-1/2">
+              <div className="relative">
+                <div className="w-20 h-20 sm:w-28 sm:h-28 rounded-full bg-gradient-to-br from-yellow-400 via-orange-400 to-pink-500 flex items-center justify-center shadow-2xl animate-bounce">
+                  <Trophy className="w-10 h-10 sm:w-14 sm:h-14 text-white drop-shadow-lg" />
+                </div>
+                {/* Brilho ao redor */}
+                <div className="absolute inset-0 rounded-full bg-yellow-300 blur-xl opacity-50 animate-pulse"></div>
               </div>
             </div>
 
-            <div className="text-center mt-8">
-              <h2 className="text-3xl font-bold text-gray-900 mb-2">
-                🎉 LEVEL UP!
-              </h2>
-              <p className="text-lg text-gray-700 mb-4">
-                Você alcançou o <span className="font-bold text-orange-600">Nível {levelUpData.newLevel}</span>!
-              </p>
-
-              <div className="bg-white rounded-2xl p-4 mb-4 border-2 border-orange-200">
-                <div className="flex items-center justify-center gap-2 mb-2">
-                  <Sparkles className="w-5 h-5 text-yellow-500" />
-                  <p className="text-sm font-semibold text-gray-700">Bônus Desbloqueado!</p>
-                </div>
-                <div className="text-3xl font-bold text-orange-600 mb-1">
-                  +{levelUpData.bonusCredits} Créditos
-                </div>
-                <p className="text-xs text-gray-600">Adicionados à sua conta</p>
-              </div>
-
-              <Button
-                onClick={() => setShowLevelUp(false)}
-                className="w-full h-12 bg-gradient-to-r from-orange-500 to-pink-500 text-white font-bold text-base rounded-xl shadow-lg hover:shadow-xl transition-all"
-              >
-                Continuar
-              </Button>
-            </div>
-
-            <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
+            {/* Fogo de artifício - MENOS NO MOBILE */}
+            <div className="absolute top-0 left-0 w-full h-full pointer-events-none overflow-hidden rounded-2xl sm:rounded-3xl">
               {[...Array(20)].map((_, i) => (
                 <div
                   key={i}
-                  className="absolute text-2xl animate-ping"
+                  className="absolute text-xl sm:text-3xl animate-ping"
                   style={{
                     top: `${Math.random() * 100}%`,
                     left: `${Math.random() * 100}%`,
                     animationDelay: `${Math.random() * 2}s`,
-                    animationDuration: '3s'
+                    animationDuration: '2s',
+                    opacity: 0.8
                   }}
                 >
-                  ✨
+                  {['🎉', '✨', '🎊', '⭐', '💫', '🌟'][Math.floor(Math.random() * 6)]}
                 </div>
               ))}
+            </div>
+
+            <div className="text-center mt-6 sm:mt-10 relative z-10">
+              {/* Título responsivo */}
+              <h2 className="text-2xl sm:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-orange-500 to-pink-600 mb-2 sm:mb-3 animate-pulse leading-tight">
+                🎉 PARABÉNS! 🎉
+              </h2>
+              <p className="text-base sm:text-xl text-gray-800 mb-2 font-bold">
+                Você subiu de nível!
+              </p>
+              
+              {/* Badge do nível - responsivo */}
+              <div className="bg-gradient-to-r from-orange-400 to-pink-500 text-white rounded-xl sm:rounded-2xl py-2 sm:py-3 px-4 sm:px-6 mb-4 sm:mb-6 inline-block shadow-lg">
+                <p className="text-3xl sm:text-5xl font-black leading-none">
+                  Nível {levelUpData.newLevel}
+                </p>
+              </div>
+
+              {/* Caixa de presente - responsiva */}
+              <div className="bg-white rounded-xl sm:rounded-2xl p-4 sm:p-6 mb-4 sm:mb-6 border-2 sm:border-4 border-yellow-400 shadow-2xl relative overflow-hidden">
+                <div className="absolute inset-0 bg-gradient-to-r from-yellow-100 via-orange-100 to-pink-100 opacity-50"></div>
+                <div className="relative z-10">
+                  <div className="flex items-center justify-center gap-2 mb-2 sm:mb-3">
+                    <div className="text-3xl sm:text-4xl animate-bounce">🎁</div>
+                    <p className="text-base sm:text-lg font-black text-gray-800">Presente!</p>
+                  </div>
+                  <div className="text-3xl sm:text-5xl font-black bg-gradient-to-r from-orange-500 to-pink-600 bg-clip-text text-transparent mb-1 sm:mb-2 leading-tight">
+                    +{levelUpData.bonusCredits}
+                  </div>
+                  <div className="text-xl sm:text-3xl font-bold text-orange-600 mb-2">
+                    Créditos
+                  </div>
+                  <p className="text-xs sm:text-sm text-gray-600 font-semibold leading-tight">
+                    Clique abaixo para receber
+                  </p>
+                </div>
+              </div>
+
+              {/* Botão responsivo */}
+              <Button
+                onClick={async () => {
+                  playSound('celebration');
+                  
+                  // ✅ ADICIONAR CRÉDITOS AGORA
+                  if (levelUpData.profileId) {
+                    try {
+                      await base44.entities.UserProfile.update(levelUpData.profileId, {
+                        credits: levelUpData.currentCredits + levelUpData.bonusCredits
+                      });
+                      queryClient.invalidateQueries({ queryKey: ['userProfile'] });
+                      queryClient.invalidateQueries({ queryKey: ['layoutUserProfile'] });
+                    } catch (error) {
+                      console.error("Erro ao adicionar créditos:", error);
+                    }
+                  }
+                  
+                  localStorage.removeItem('pending_level_up');
+                  setShowLevelUp(false);
+                }}
+                className="w-full h-12 sm:h-14 bg-gradient-to-r from-orange-500 via-pink-500 to-purple-500 text-white font-black text-base sm:text-lg rounded-xl shadow-2xl hover:shadow-3xl active:scale-95 sm:hover:scale-105 transition-all duration-300"
+              >
+                🎊 Pegar Presente! 🎊
+              </Button>
             </div>
           </div>
         </div>

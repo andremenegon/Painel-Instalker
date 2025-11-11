@@ -94,17 +94,17 @@ export default function FacebookSpy() {
     });
   }, []);
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity,
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [], refetch } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -411,31 +411,9 @@ export default function FacebookSpy() {
       {activeFacebookInvestigation ? (
         // Active Investigation UI
         <div className="min-h-screen bg-[#F0F2F5]">
-          {/* Header */}
-          <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-            <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-              <Button
-                variant="ghost"
-                onClick={() => navigate(createPageUrl("Dashboard"))}
-                className="h-9 px-3 hover:bg-gray-100"
-                size="sm"
-              >
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                Voltar
-              </Button>
-              
-              <h1 className="text-base font-bold text-gray-900">Facebook</h1>
-              
-              {userProfile && (
-                <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                  <Zap className="w-3 h-3 text-orange-500" />
-                  <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-                </div>
-              )}
-            </div>
-          </div>
+          {/* ✅ Header gerenciado pelo Layout.jsx */}
 
-          <div className="w-full max-w-2xl mx-auto p-3">
+          <div className="w-full max-w-2xl mx-auto p-3 pt-6">
             <Card className="bg-white border-0 shadow-md p-4 mb-3">
               {/* Card content */}
               <div className="flex items-center gap-3 mb-4">
@@ -564,31 +542,9 @@ export default function FacebookSpy() {
       ) : (
         // No Active Investigation UI
         <div className="min-h-screen bg-[#F0F2F5]">
-          {/* Header */}
-          <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-            <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-              <Button
-                variant="ghost"
-                onClick={() => navigate(createPageUrl("Dashboard"))}
-                className="h-9 px-3 hover:bg-gray-100"
-                size="sm"
-              >
-                <ArrowLeft className="w-4 h-4 mr-1" />
-                Voltar
-              </Button>
-              
-              <h1 className="text-base font-bold text-gray-900">Facebook</h1>
-              
-              {userProfile && (
-                <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                  <Zap className="w-3 h-3 text-orange-500" />
-                  <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-                </div>
-              )}
-            </div>
-          </div>
+          {/* ✅ Header gerenciado pelo Layout.jsx */}
 
-          <div className="w-full max-w-2xl mx-auto p-3">
+          <div className="w-full max-w-2xl mx-auto p-3 pt-6">
             <Card className="bg-white border-0 shadow-md p-4 sm:p-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 rounded-full bg-[#1877F2] flex items-center justify-center">

@@ -156,17 +156,18 @@ export default function WhatsApp () {
     refetchOnMount: false,
   });
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity, // ✅ CACHE INFINITO
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false, // ✅ DESATIVADO
-    refetchOnMount: false, // ✅ DESATIVADO
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      console.log('🔍 WhatsApp - UserProfile carregado:', profiles);
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [], refetch } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -322,8 +323,22 @@ export default function WhatsApp () {
   }, [targetDigits, phoneDigits]);
 
   const maskContactNumber = useCallback((suffix) => {
+    // Gerar números variados baseados no suffix (sempre começando com 9 - celulares brasileiros)
+    const numberMap = {
+      '53**': '9127',
+      '78**': '9654', 
+      '94**': '9392',
+      '12**': '9845',
+      '67**': '9231',
+      '89**': '9568',
+      '21**': '9712',
+      '46**': '9483',
+      '35**': '9256'
+    };
+    
+    const baseNumber = numberMap[suffix] || '9883';
     const sanitized = suffix.replace(/[^0-9*]/g, '').padEnd(4, '*');
-    return `(${targetDdd}) 9883-${sanitized}`;
+    return `(${targetDdd}) ${baseNumber}-${sanitized}`;
   }, [targetDdd]);
 
   const quickActions = useMemo(() => ([
@@ -332,7 +347,7 @@ export default function WhatsApp () {
       label: 'Extrair PDF Completo',
       icon: '📄',
       unlockKey: 'quick_fullReport',
-      cost: 80,
+      cost: 140,
       description: 'Consolidamos conversas, anexos e evidências em um PDF com sumário investigativo.'
     },
     {
@@ -340,24 +355,24 @@ export default function WhatsApp () {
       label: 'Baixar Áudios',
       icon: '🎧',
       unlockKey: 'quick_audioPack',
-      cost: 55,
+      cost: 120,
       description: 'Organizamos todos os áudios e notas de voz em um pacote único, pronto para download.'
-    },
-    {
-      key: 'contactsExport',
-      label: 'Exportar Contatos',
-      icon: '📇',
-      unlockKey: 'quick_contactsExport',
-      cost: 40,
-      description: 'Geramos uma planilha com todos os contatos relevantes, marcando vínculos e tags suspeitas.'
     },
     {
       key: 'suspiciousCalls',
       label: 'Ver Chamadas Suspeitas',
       icon: '📞',
       unlockKey: 'quick_suspiciousCalls',
-      cost: 45,
+      cost: 80,
       description: 'Destacamos as ligações que fogem do padrão, com duração, recorrência e horários críticos.'
+    },
+    {
+      key: 'contactsExport',
+      label: 'Exportar Contatos',
+      icon: '📇',
+      unlockKey: 'quick_contactsExport',
+      cost: 50,
+      description: 'Geramos uma planilha com todos os contatos relevantes, marcando vínculos e tags suspeitas.'
     }
   ]), []);
 
@@ -388,50 +403,296 @@ export default function WhatsApp () {
     }
   ]), [maskContactNumber]);
 
-  const conversationThreads = useMemo(() => ([
+  const allConversationThreads = useMemo(() => ([
+    // 3 primeiras conversas (sempre visíveis)
     {
       id: 'thread-01',
       unlockKey: 'chat_thread_01',
-      cost: 40,
+      cost: 65,
       contact: maskContactNumber('53**'),
-      preview: 'Então me espera com a luz baixa e sem nada por baixo.',
+      preview: 'vc sabe oq eu quero ne 😏',
       lastActivityMinutes: 32,
+      unreadCount: 8,
       messages: [
-        { from: 'contact', text: 'Abre a porta lateral às 22h, tô levando o vinho que você gosta.' },
-        { from: 'target', text: 'Tô dizendo que é reunião... entra em silêncio.' },
-        { from: 'contact', text: 'Se enrolar de novo, mando aquele vídeo pro seu e-mail corporativo.' },
-        { from: 'target', text: 'Então me espera com a luz baixa e sem nada por baixo.' }
+        { from: 'contact', text: 'cade vc???' },
+        { from: 'contact', text: 'serio q vc vai me ignorar dnv?' },
+        { from: 'target', text: 'nao to ignorando nao' },
+        { from: 'target', text: 'to sem tempo pra nada ultimamente' },
+        { from: 'contact', text: 'sempre a mesma desculpa' },
+        { from: 'contact', text: 'qnd a gnt se ve entao?' },
+        { from: 'target', text: 'essa semana ta foda, mas semana q vem da' },
+        { from: 'contact', text: 'vc falou isso mes passado' },
+        { from: 'target', text: 'eu sei mas agr vai dar msm' },
+        { from: 'contact', text: 'to com mt sdds' },
+        { from: 'target', text: 'eu tbm delicia' },
+        { from: 'contact', text: 'entao para de enrolar' },
+        { from: 'target', text: 'nao to enrolando' },
+        { from: 'target', text: 'ta dificil demais sair daqui, mas vou dar um jeito juro' },
+        { from: 'contact', text: 'hum' },
+        { from: 'contact', text: 'vc sabe oq eu quero ne 😏' },
+        { from: 'target', text: 'sei sim bb 🔥' },
+        { from: 'contact', text: 'entao nao me faz esperar mt tempo' },
+        { from: 'target', text: 'nao vou fazer' },
+        { from: 'contact', text: 'vo dormir ja, tenho q acordar cedo' }
       ]
     },
     {
       id: 'thread-02',
       unlockKey: 'chat_thread_02',
-      cost: 40,
+      cost: 65,
       contact: maskContactNumber('78**'),
-      preview: 'Te espero na garagem com a taça e sem nada além dela.',
+      preview: 'to morrendo de sdds disso td',
       lastActivityMinutes: 190,
       messages: [
-        { from: 'target', text: 'A desculpa do happy hour colou de novo. Tô a caminho.' },
-        { from: 'contact', text: 'Quero você com a camisa azul desabotoada, igual ontem.' },
-        { from: 'target', text: 'Você sabe provocar. Já tô estacionando.' },
-        { from: 'contact', text: 'Te espero na garagem com a taça e sem nada além dela.' }
+        { from: 'target', text: 'to morrendo de sdds de vc' },
+        { from: 'contact', text: 'serio?' },
+        { from: 'target', text: 'mt serio' },
+        { from: 'contact', text: 'entao pq sumiu esse tempo todo?' },
+        { from: 'target', text: 'foi mal bb, tava uma correria absurda aqui' },
+        { from: 'contact', text: 'sei' },
+        { from: 'target', text: 'mas agr ta melhorando' },
+        { from: 'contact', text: 'qnd a gnt se ve entao?' },
+        { from: 'target', text: 'essa semana ainda da pra ir ai' },
+        { from: 'contact', text: 'como assim "da pra ir"?? vc tem q vir' },
+        { from: 'target', text: 'calma bb, vou dar um jeito' },
+        { from: 'contact', text: 'to precisando mt de vc' },
+        { from: 'target', text: 'eu tbm preciso de vc' },
+        { from: 'contact', text: 'cade vc????' },
+        { from: 'contact', text: 'me responde' },
+        { from: 'target', text: 'desculpa tava no banho' },
+        { from: 'contact', text: 'hum' },
+        { from: 'contact', text: 'to morrendo de sdds disso td 😍' },
+        { from: 'target', text: 'eu tbm delicia vc nem imagina 🔥' },
+        { from: 'target', text: 'dps conversamos melhor, to com mt sono' },
+        { from: 'contact', text: 'ta bom' }
       ]
     },
     {
       id: 'thread-03',
       unlockKey: 'chat_thread_03',
-      cost: 40,
+      cost: 65,
       contact: maskContactNumber('94**'),
-      preview: 'Tá enviando agora... guarda a chave com você.',
+      preview: 'apaga essa conversa dps ta??',
       lastActivityMinutes: 8,
+      unreadCount: 12,
       messages: [
-        { from: 'contact', text: 'Já reservei o quarto 405 de novo. Check-in no seu nome.' },
-        { from: 'target', text: 'Apaga o chat depois disso, tô paranoico.' },
-        { from: 'contact', text: 'Sem comprovante não tem surpresa. Quero foto no espelho.' },
-        { from: 'target', text: 'Tá enviando agora... guarda a chave com você.' }
+        { from: 'contact', text: 'conseguiu resolver aquilo?' },
+        { from: 'target', text: 'ainda nao' },
+        { from: 'target', text: 'ta dificil pra caralho' },
+        { from: 'contact', text: 'mas vc disse q ia dar certo' },
+        { from: 'target', text: 'eu sei mas complicou tudo aqui' },
+        { from: 'contact', text: 'faz um esforco pelo menos' },
+        { from: 'target', text: 'to fazendo' },
+        { from: 'contact', text: 'sumiu???' },
+        { from: 'contact', text: 'pqp cade vc' },
+        { from: 'target', text: 'to aqui calma' },
+        { from: 'target', text: 'tava resolvendo uma coisa' },
+        { from: 'contact', text: 'apaga essa conversa dps ta' },
+        { from: 'contact', text: 'to serio' },
+        { from: 'target', text: 'relaxa sempre apago' },
+        { from: 'contact', text: 'dessa vez é diferente' },
+        { from: 'contact', text: 'to com mt medo' },
+        { from: 'target', text: 'vai dar tudo certo confia' },
+        { from: 'contact', text: 'promete q apaga?' },
+        { from: 'target', text: 'prometo' },
+        { from: 'target', text: 'pode confiar em mim 🔐' }
+      ]
+    },
+    // 3 conversas extras (carregadas ao clicar "Carregar mais" 1x)
+    {
+      id: 'thread-04',
+      unlockKey: 'chat_thread_04',
+      cost: 65,
+      contact: maskContactNumber('12**'),
+      preview: 'manda ft',
+      lastActivityMinutes: 145,
+      messages: [
+        { from: 'contact', text: 'pensando em vc aqui' },
+        { from: 'target', text: 'serio?' },
+        { from: 'contact', text: 'sempre penso' },
+        { from: 'target', text: 'q fofo 😏' },
+        { from: 'contact', text: 'manda ft' },
+        { from: 'target', text: 'agr??' },
+        { from: 'contact', text: 'sim' },
+        { from: 'target', text: 'to meio zuado aqui' },
+        { from: 'contact', text: 'nao importa manda assim msm' },
+        { from: 'target', text: 'ta bom dps eu mando' },
+        { from: 'contact', text: 'cade vc???' },
+        { from: 'contact', text: 'sumiu mano' },
+        { from: 'target', text: 'to aqui bb' },
+        { from: 'target', text: 'tava fazendo uma coisa rapida' },
+        { from: 'contact', text: 'nao esquece da ft' },
+        { from: 'target', text: 'nao esqueço' },
+        { from: 'target', text: 'mais tarde eu tiro e mando pra vc 📸' },
+        { from: 'contact', text: 'ta bom' }
+      ]
+    },
+    {
+      id: 'thread-05',
+      unlockKey: 'chat_thread_05',
+      cost: 65,
+      contact: maskContactNumber('67**'),
+      preview: 'to so aqui...',
+      lastActivityMinutes: 68,
+      unreadCount: 5,
+      messages: [
+        { from: 'contact', text: 'to so aqui em casa' },
+        { from: 'target', text: 'é msm?' },
+        { from: 'contact', text: 'é 😳' },
+        { from: 'target', text: 'hmmm' },
+        { from: 'contact', text: 'pq?' },
+        { from: 'target', text: 'nada nao' },
+        { from: 'contact', text: 'fala' },
+        { from: 'target', text: 'to entediado tbm' },
+        { from: 'contact', text: 'vem pra ca entao' },
+        { from: 'target', text: 'serio?' },
+        { from: 'contact', text: 'serio' },
+        { from: 'target', text: 'cade vc???' },
+        { from: 'target', text: 'sumiu dnv' },
+        { from: 'contact', text: 'to aqui' },
+        { from: 'contact', text: 'entao vem ou n?' },
+        { from: 'target', text: 'to indo' },
+        { from: 'contact', text: 'serio?? 😍' },
+        { from: 'target', text: 'serio' },
+        { from: 'target', text: 'ja saindo daqui' },
+        { from: 'contact', text: 'me espera' }
+      ]
+    },
+    {
+      id: 'thread-06',
+      unlockKey: 'chat_thread_06',
+      cost: 65,
+      contact: maskContactNumber('89**'),
+      preview: 'ninguem pode saber disso',
+      lastActivityMinutes: 421,
+      messages: [
+        { from: 'target', text: 'dei um jeito na parada' },
+        { from: 'contact', text: 'serio???' },
+        { from: 'target', text: 'serio' },
+        { from: 'contact', text: 'como???' },
+        { from: 'target', text: 'tive q me virar mas consegui' },
+        { from: 'contact', text: 'nossa' },
+        { from: 'target', text: 'ne' },
+        { from: 'contact', text: 'ta confirmado entao?' },
+        { from: 'target', text: 'ta' },
+        { from: 'contact', text: 'to tenso demais' },
+        { from: 'target', text: 'relaxa vai dar certo' },
+        { from: 'contact', text: 'vc sumiu???' },
+        { from: 'target', text: 'to aqui bb' },
+        { from: 'target', text: 'desculpa demorei' },
+        { from: 'contact', text: 'ninguem pode saber disso ta' },
+        { from: 'contact', text: 'to falando serio' },
+        { from: 'target', text: 'eu sei' },
+        { from: 'target', text: 'ninguem vai saber confia' },
+        { from: 'target', text: 'sempre fui discreto 🤫' },
+        { from: 'contact', text: 'ta bom' }
+      ]
+    },
+    // 3 conversas finais (carregadas ao clicar "Carregar mais" 2x)
+    {
+      id: 'thread-07',
+      unlockKey: 'chat_thread_07',
+      cost: 65,
+      contact: maskContactNumber('21**'),
+      preview: 'traz o q eu pedi',
+      lastActivityMinutes: 92,
+      messages: [
+        { from: 'contact', text: 'nao esquece de trazer o q eu pedi' },
+        { from: 'target', text: 'nao esqueço' },
+        { from: 'contact', text: 'da ultima vez vc esqueceu' },
+        { from: 'target', text: 'dessa vez eu lembro' },
+        { from: 'contact', text: 'tem certeza?' },
+        { from: 'target', text: 'tenho' },
+        { from: 'contact', text: 'vai dar pra ir mesmo?' },
+        { from: 'target', text: 'vai sim' },
+        { from: 'contact', text: 'q horas?' },
+        { from: 'target', text: 'dps eu falo' },
+        { from: 'contact', text: 'cade vc??' },
+        { from: 'target', text: 'to aqui' },
+        { from: 'target', text: 'tava ocupado' },
+        { from: 'contact', text: 'serio nao esquece ta' },
+        { from: 'target', text: 'nao vou esquecer' },
+        { from: 'target', text: 'prometo' },
+        { from: 'contact', text: 'to esperando entao 😏' },
+        { from: 'target', text: 'blz' }
+      ]
+    },
+    {
+      id: 'thread-08',
+      unlockKey: 'chat_thread_08',
+      cost: 65,
+      contact: maskContactNumber('46**'),
+      preview: 'sem desculpas dessa vez',
+      lastActivityMinutes: 256,
+      unreadCount: 7,
+      messages: [
+        { from: 'contact', text: 'me deu bolo denovo' },
+        { from: 'target', text: 'como assim?' },
+        { from: 'contact', text: 'vc tinha falado q ia' },
+        { from: 'target', text: 'eu sei mas complicou tudo aqui' },
+        { from: 'contact', text: 'sempre complica ne' },
+        { from: 'target', text: 'calma bb' },
+        { from: 'contact', text: 'nao to calmo' },
+        { from: 'target', text: 'vou compensar juro' },
+        { from: 'contact', text: 'quando?' },
+        { from: 'target', text: 'essa semana' },
+        { from: 'contact', text: 'sem desculpas dessa vez' },
+        { from: 'target', text: 'sem desculpas' },
+        { from: 'contact', text: 'sumiu???' },
+        { from: 'target', text: 'to aqui' },
+        { from: 'target', text: 'desculpa' },
+        { from: 'contact', text: 'nao me decepciona dnv' },
+        { from: 'target', text: 'nao vou' },
+        { from: 'contact', text: 'to doido pra te ver 😊' },
+        { from: 'target', text: 'eu tbm ❤️' },
+        { from: 'target', text: 'dps conversamos, to com mt sono' },
+        { from: 'contact', text: 'ta' }
+      ]
+    },
+    {
+      id: 'thread-09',
+      unlockKey: 'chat_thread_09',
+      cost: 65,
+      contact: maskContactNumber('35**'),
+      preview: 'preciso mt falar com vc',
+      lastActivityMinutes: 512,
+      messages: [
+        { from: 'contact', text: 'preciso falar com vc urgente' },
+        { from: 'target', text: 'oq foi?' },
+        { from: 'contact', text: 'nao da pra falar aqui' },
+        { from: 'target', text: 'pq nao?' },
+        { from: 'contact', text: 'tem q ser pessoalmente' },
+        { from: 'target', text: 'é serio assim?' },
+        { from: 'contact', text: 'mt serio' },
+        { from: 'target', text: 'ta me deixando preocupado' },
+        { from: 'contact', text: 'qnd da pra vc?' },
+        { from: 'target', text: 'nsei ainda' },
+        { from: 'contact', text: 'cade vc???' },
+        { from: 'target', text: 'to aqui' },
+        { from: 'contact', text: 'me responde' },
+        { from: 'target', text: 'me fala pelo menos um pouco' },
+        { from: 'contact', text: 'nao da' },
+        { from: 'target', text: 'ta me deixando com medo' },
+        { from: 'contact', text: 'desculpa' },
+        { from: 'contact', text: 'mas é melhor conversarmos pessoalmente msm' },
+        { from: 'target', text: 'ok' },
+        { from: 'target', text: 'a gnt se ve logo 😔' }
       ]
     }
   ]), [maskContactNumber]);
+
+  // Estado para controlar quantas conversas mostrar
+  const [loadMoreCount, setLoadMoreCount] = useState(0);
+  
+  // Calcular quantas conversas mostrar baseado no loadMoreCount
+  const conversationThreads = useMemo(() => {
+    const baseCount = 3; // Sempre mostra 3 inicialmente
+    const visibleCount = baseCount + (loadMoreCount * 3); // +3 a cada clique
+    return allConversationThreads.slice(0, Math.min(visibleCount, allConversationThreads.length));
+  }, [allConversationThreads, loadMoreCount]);
+  
+  // Verificar se há mais conversas para carregar
+  const hasMoreConversations = conversationThreads.length < allConversationThreads.length;
 
   const handleUnlockSection = async (sectionKey, credits) => {
     playSound('click');
@@ -456,22 +717,24 @@ export default function WhatsApp () {
 
     try {
       
+      const xpToAdd = Math.floor(credits / 2); // ✅ ARREDONDAR PARA INTEIRO
+      
       await base44.entities.UserProfile.update(userProfile.id, {
         credits: userProfile.credits - credits,
-        xp: userProfile.xp + (credits / 2) // Half credits as XP
+        xp: userProfile.xp + xpToAdd
       });
       
       queryClient.setQueryData(['userProfile', user?.email], (oldData) => {
         if (!oldData) return oldData;
         return oldData.map((profile) =>
           profile.id === userProfile.id
-            ? { ...profile, credits: userProfile.credits - credits, xp: userProfile.xp + credits / 2 }
+            ? { ...profile, credits: userProfile.credits - credits, xp: userProfile.xp + xpToAdd }
             : profile
         );
       });
       queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
         if (!oldProfile) return oldProfile;
-        return { ...oldProfile, credits: userProfile.credits - credits, xp: userProfile.xp + credits / 2 };
+        return { ...oldProfile, credits: userProfile.credits - credits, xp: userProfile.xp + xpToAdd };
       });
       queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
       queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
@@ -484,29 +747,11 @@ export default function WhatsApp () {
       }
       
       setCreditsSpent(credits);
-      setXpGained(credits / 2);
+      setXpGained(xpToAdd); // ✅ USAR XP ARREDONDADO
       setShowCreditAlert(true);
       setTimeout(() => setShowCreditAlert(false), 3000);
       
       setShowParticles(true);
-      const sectionMessages = {
-        messages: 'Relatório liberado! ✨',
-        photos: 'Pacote de mídias destravado! ✨',
-        quick_fullReport: 'PDF completo reservado! ✨',
-        quick_audioPack: 'Pacote de áudios em preparação! ✨',
-        quick_contactsExport: 'Agenda exportada! ✨',
-        quick_suspiciousCalls: 'Chamadas destacadas foram liberadas! ✨',
-        chat_thread_01: 'Conversa liberada com sucesso! ✨',
-        chat_thread_02: 'Conversa liberada com sucesso! ✨',
-        chat_thread_03: 'Conversa liberada com sucesso! ✨',
-        chat_thread_01_history: 'Estamos puxando mensagens antigas desse contato... ✨',
-        chat_thread_02_history: 'Estamos puxando mensagens antigas desse contato... ✨',
-        chat_thread_03_history: 'Estamos puxando mensagens antigas desse contato... ✨',
-        more_conversations: 'Novas conversas serão carregadas em instantes! ✨'
-      };
-      setToastMessage(sectionMessages[sectionKey] || 'Conteúdo Desbloqueado! ✨');
-      setToastType('success');
-      setShowToast(true);
       return true;
     } catch (error) {
       console.error("Erro ao desbloquear seção:", error);
@@ -573,7 +818,7 @@ export default function WhatsApp () {
       confirmText: 'Desbloquear conversa',
       cancelText: 'Agora não',
       onConfirm: async () => {
-        playSound('click');
+        playSound('unlock'); // ✅ SOM AO DESBLOQUEAR
         setShowAlertModal(false);
         const success = await handleUnlockSection(thread.unlockKey, thread.cost);
         if (success) {
@@ -588,7 +833,13 @@ export default function WhatsApp () {
   const handleLoadMoreHistory = useCallback((thread) => {
     const historyKey = `${thread.unlockKey}_history`;
 
-    if (loadingHistoryFor === thread.id || unlockedSections[historyKey]) {
+    // Se já está carregando, não fazer nada
+    if (loadingHistoryFor === thread.id) {
+      return;
+    }
+
+    // Se já está desbloqueado, apenas mostrar o histórico
+    if (unlockedSections[historyKey]) {
       setLoadingHistoryFor(thread.id);
       return;
     }
@@ -923,7 +1174,6 @@ export default function WhatsApp () {
     return (
       <>
         <ScreenShake trigger={shakeScreen} />
-        <Toast show={showToast} message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />
         <Particles show={showParticles} />
         
         <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
@@ -1021,7 +1271,6 @@ export default function WhatsApp () {
     return (
       <>
         <ScreenShake trigger={shakeScreen} />
-        <Toast show={showToast} message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />
         <Particles show={showParticles} />
         
         <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
@@ -1151,41 +1400,31 @@ export default function WhatsApp () {
     return (
       <>
         <ScreenShake trigger={shakeScreen} />
-        <Toast show={showToast} message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />
         <Particles show={showParticles} />
         
         <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
           <div className="w-full max-w-3xl mx-auto p-3 space-y-4">
             <Card className="bg-white border border-emerald-100 shadow-md rounded-2xl p-5">
-              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                <div>
-                  <span className="text-[11px] uppercase tracking-[0.22em] text-emerald-600 font-semibold">WhatsApp concluído</span>
-                  <h2 className="mt-2 text-xl font-extrabold text-gray-900">Varredura finalizada com evidências classificadas</h2>
-                  <p className="mt-2 text-sm text-gray-600 leading-relaxed">
-                    Organizamos todas as conversas, anexos e chamadas com foco no que realmente importa. Abaixo estão os pontos que sugerimos acompanhar com atenção.
-                  </p>
-                </div>
-              {userProfile && (
-                  <div className="sm:self-start">
-                    <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 border border-emerald-100 px-3 py-1 text-[11px] font-semibold text-emerald-700">
-                      <Zap className="w-3 h-3" /> Saldo atual: {userProfile.credits} créditos
-                    </span>
-                </div>
-              )}
-          </div>
+              <div>
+                <span className="text-[11px] uppercase tracking-[0.22em] text-emerald-600 font-semibold">WhatsApp concluído</span>
+                <h2 className="mt-2 text-xl sm:text-2xl font-extrabold text-gray-900">Varredura finalizada com evidências classificadas</h2>
+                <p className="mt-2 text-sm sm:text-base text-gray-600 leading-relaxed">
+                  Identificamos conversas, áudios e chamadas suspeitas. Cada detalhe foi analisado para revelar o que realmente importa.
+                </p>
+              </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3">
-                  <p className="text-[10px] font-semibold text-emerald-700 uppercase tracking-wide">Conversas críticas</p>
-                  <p className="text-lg font-bold text-emerald-900 mt-1">3 conversas</p>
+                <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-3 sm:p-4">
+                  <p className="text-[10px] sm:text-[11px] font-semibold text-emerald-700 uppercase tracking-wide">Mensagens suspeitas</p>
+                  <p className="text-lg sm:text-xl font-bold text-emerald-900 mt-1">{conversationThreads.length} conversas</p>
                 </div>
-                <div className="rounded-xl bg-orange-50 border border-orange-100 p-3">
-                  <p className="text-[10px] font-semibold text-orange-600 uppercase tracking-wide">Chamadas fora de horário</p>
-                  <p className="text-lg font-bold text-orange-700 mt-1">7 registros</p>
+                <div className="rounded-xl bg-orange-50 border border-orange-100 p-3 sm:p-4">
+                  <p className="text-[10px] sm:text-[11px] font-semibold text-orange-600 uppercase tracking-wide">Chamadas fora de horário</p>
+                  <p className="text-lg sm:text-xl font-bold text-orange-700 mt-1">7 registros</p>
                   </div>
-                <div className="rounded-xl bg-slate-50 border border-slate-200 p-3">
-                  <p className="text-[10px] font-semibold text-slate-600 uppercase tracking-wide">Áudios aguardando análise</p>
-                  <p className="text-lg font-bold text-slate-900 mt-1">18 arquivos</p>
+                <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 sm:p-4">
+                  <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 uppercase tracking-wide">Áudios interceptados</p>
+                  <p className="text-lg sm:text-xl font-bold text-slate-900 mt-1">18 arquivos</p>
                   </div>
                   </div>
 
@@ -1213,8 +1452,8 @@ export default function WhatsApp () {
                   </div>
             </Card>
 
-            <Card className="bg-white border-0 shadow-lg p-5">
-                  <h3 className="font-bold text-gray-900 text-sm mb-3">📱 Conversas suspeitas monitoradas</h3>
+            <Card className="bg-white border-0 shadow-lg p-4 sm:p-5">
+                  <h3 className="font-bold text-gray-900 text-sm sm:text-base mb-3">📱 Conversas suspeitas monitoradas</h3>
                     <div className="space-y-3">
                 {conversationThreads.map((thread) => {
                   const unlocked = !!unlockedSections[thread.unlockKey];
@@ -1225,21 +1464,28 @@ export default function WhatsApp () {
                   return (
                     <div
                       key={thread.id}
-                      className={`rounded-2xl border ${unlocked ? 'border-emerald-200 bg-emerald-50/60' : 'border-gray-200 bg-gray-50'} p-3`}
+                      className={`rounded-2xl border ${unlocked ? 'border-emerald-200 bg-emerald-50/60 animate-in slide-in-from-left duration-300' : 'border-gray-200 bg-gray-50 hover:border-gray-300 transition-all'} p-3 sm:p-4`}
                     >
                       <button
                         type="button"
                         onClick={() => handleConversationTap(thread)}
-                        className="w-full text-left"
+                        className="w-full text-left active:scale-98 transition-transform"
                       >
                           <div className="flex items-center justify-between">
-                          <div>
-                            <p className="text-[13px] font-semibold text-gray-900">{thread.contact}</p>
-                            <p className="text-[11px] text-gray-500">Atualizado {formatRelativeTimestamp(thread.lastActivityMinutes)}</p>
+                          <div className="flex items-center gap-2 flex-1">
+                            <div className="relative">
+                              <p className="text-[13px] sm:text-[14px] font-semibold text-gray-900">{thread.contact}</p>
+                              <p className="text-[11px] sm:text-[12px] text-gray-500">Atualizado {formatRelativeTimestamp(thread.lastActivityMinutes)}</p>
+                            </div>
+                            {!unlocked && thread.unreadCount && (
+                              <div className="ml-2 min-w-[20px] h-5 bg-red-500 rounded-full flex items-center justify-center px-1.5 animate-pulse">
+                                <span className="text-[10px] font-bold text-white">{thread.unreadCount}</span>
+                              </div>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
-                            <Badge className={`text-[10px] ${unlocked ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-600'}`}>
-                              {unlocked ? 'Liberado' : `Desbloquear - ${thread.cost} créditos`}
+                            <Badge className={`text-[10px] sm:text-[11px] ${unlocked ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-600'}`}>
+                              {unlocked ? 'Liberado' : `${thread.cost} créditos`}
                             </Badge>
                             <span className="text-gray-400 text-lg">›</span>
                           </div>
@@ -1249,15 +1495,30 @@ export default function WhatsApp () {
                           {unlocked ? (
                             expanded ? (
                               <>
-                                <div className="space-y-2">
+                                <div className="space-y-2 bg-[#E5DDD5] p-3 rounded-xl animate-in slide-in-from-top-2 duration-300">
                                   {thread.messages.map((message, idx) => (
-                                    <div key={idx} className={`flex ${message.from === 'target' ? 'justify-end' : 'justify-start'}`}>
-                                      <span className={`${message.from === 'target' ? 'bg-emerald-600 text-white rounded-t-2xl rounded-bl-2xl' : 'bg-white text-gray-800 border border-emerald-100 rounded-t-2xl rounded-br-2xl'} px-3 py-2 text-[13px] leading-snug max-w-[80%] shadow-sm`}>
-                                        {message.text}
-                                      </span>
-                        </div>
-                      ))}
-                    </div>
+                                    <div 
+                                      key={idx} 
+                                      className={`flex ${message.from === 'target' ? 'justify-end' : 'justify-start'} animate-in fade-in duration-200`}
+                                      style={{ animationDelay: `${idx * 50}ms` }}
+                                    >
+                                      <div className={`relative ${message.from === 'target' ? 'bg-[#DCF8C6]' : 'bg-white'} px-3 py-2 rounded-lg shadow-sm max-w-[75%] sm:max-w-[80%]`}>
+                                        {/* Rabinho da bolha */}
+                                        {message.from === 'target' ? (
+                                          <div className="absolute top-0 right-0 w-0 h-0 border-l-[8px] border-l-transparent border-t-[10px] border-t-[#DCF8C6] transform translate-x-[8px]"></div>
+                                        ) : (
+                                          <div className="absolute top-0 left-0 w-0 h-0 border-r-[8px] border-r-transparent border-t-[10px] border-t-white transform -translate-x-[8px]"></div>
+                                        )}
+                                        <p className="text-[13px] sm:text-[14px] text-gray-900 leading-relaxed">
+                                          {message.text}
+                                        </p>
+                                        <span className="text-[10px] text-gray-500 float-right ml-2 mt-1">
+                                          {idx === 0 ? '10:23' : idx === 1 ? '10:25' : idx === 2 ? '10:27' : '10:29'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
                                 <div className="mt-3">
                                   {historyRequested ? (
                                     <div className="flex items-center gap-2 text-[11px] text-emerald-600">
@@ -1267,7 +1528,7 @@ export default function WhatsApp () {
                                   ) : (
                                     <Button
                                       variant="outline"
-                                      className="h-8 px-3 text-[11px] border border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+                                      className="h-8 sm:h-9 px-3 text-[11px] sm:text-[12px] border border-emerald-300 text-emerald-700 hover:bg-emerald-100 active:scale-95 transition-transform"
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleLoadMoreHistory(thread);
@@ -1275,27 +1536,27 @@ export default function WhatsApp () {
                                     >
                                       Carregar mais histórico - 30 créditos
                                     </Button>
-                  )}
+                                  )}
                 </div>
                               </>
                             ) : (
-                              <p className="text-[12px] text-emerald-700 font-medium">Toque para abrir a conversa completa.</p>
+                              <p className="text-[12px] sm:text-[13px] text-emerald-700 font-medium">Toque para abrir a conversa completa.</p>
                             )
                           ) : (
                             <div className="flex items-center justify-between gap-3">
-                              <p className="text-[12px] text-gray-600 italic max-w-[70%]">{lastMessage}</p>
-                      <Button
-                        size="sm"
-                                className="h-8 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white text-xs"
+                              <p className="text-[12px] sm:text-[13px] text-gray-600 italic max-w-[65%] truncate">{lastMessage}</p>
+                              <Button
+                                size="sm"
+                                className="h-8 sm:h-9 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white text-xs sm:text-sm active:scale-95 transition-transform"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleConversationTap(thread);
                                 }}
                               >
-                                Ver conversa - {thread.cost} créditos
-                      </Button>
+                                Ver conversa
+                              </Button>
                             </div>
-                    )}
+                          )}
                   </div>
                       </button>
                         </div>
@@ -1304,19 +1565,78 @@ export default function WhatsApp () {
                     </div>
 
               <div className="mt-4">
-                {unlockedSections.more_conversations ? (
-                  <div className="rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 px-3 py-3 text-[12px] text-emerald-700">
-                    Processando novas conversas confidenciais... volte em alguns minutos para atualizar.
-                    </div>
-                ) : (
+                {hasMoreConversations ? (
                   <Button
                     variant="outline"
                     className="w-full h-10 border border-emerald-300 text-emerald-700 hover:bg-emerald-50 text-sm font-semibold"
-                    onClick={() => handleUnlockSection('more_conversations', 35)}
+                    onClick={async () => {
+                      playSound('click');
+                      
+                      // Verificar se tem créditos
+                      if (!userProfile || userProfile.credits < 35) {
+                        playSound('error');
+                        setAlertConfig({
+                          title: "Créditos Insuficientes",
+                          message: "Você precisa de 35 créditos para carregar mais conversas.",
+                          confirmText: "Comprar Créditos",
+                          onConfirm: () => {
+                            playSound('click');
+                            setShowAlertModal(false);
+                            navigate(createPageUrl("BuyCredits"));
+                          },
+                          cancelText: "Voltar"
+                        });
+                        setShowAlertModal(true);
+                        return;
+                      }
+                      
+                      // Cobrar créditos
+                      try {
+                        const xpToAdd = Math.floor(35 / 2);
+                        
+                        await base44.entities.UserProfile.update(userProfile.id, {
+                          credits: userProfile.credits - 35,
+                          xp: userProfile.xp + xpToAdd
+                        });
+                        
+                        queryClient.setQueryData(['userProfile', user?.email], (oldData) => {
+                          if (!oldData) return oldData;
+                          return oldData.map((profile) =>
+                            profile.id === userProfile.id
+                              ? { ...profile, credits: userProfile.credits - 35, xp: userProfile.xp + xpToAdd }
+                              : profile
+                          );
+                        });
+                        queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
+                          if (!oldProfile) return oldProfile;
+                          return { ...oldProfile, credits: userProfile.credits - 35, xp: userProfile.xp + xpToAdd };
+                        });
+                        queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
+                        queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
+                        
+                        // Incrementar contador para mostrar +3 conversas
+                        setLoadMoreCount(prev => prev + 1);
+                        
+                        // Feedback visual
+                        setCreditsSpent(35);
+                        setXpGained(xpToAdd);
+                        setShowCreditAlert(true);
+                        setTimeout(() => setShowCreditAlert(false), 3000);
+                        
+                        setShowParticles(true);
+                      } catch (error) {
+                        console.error("Erro ao carregar mais conversas:", error);
+                        playSound('error');
+                      }
+                    }}
                   >
                     Carregar mais conversas - 35 créditos
                   </Button>
-                  )}
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 px-3 py-3 text-[12px] text-emerald-700">
+                    Processando novas conversas confidenciais... volte em alguns minutos para atualizar.
+                  </div>
+                )}
                 </div>
               </Card>
 

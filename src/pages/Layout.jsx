@@ -10,11 +10,12 @@ import Logo from "@/components/dashboard/Logo";
 import logoFull from "@/assets/branding/instalker-logo-full.png";
 import fivecon from "@/assets/branding/fivecon.png";
 import { setLastEmail } from "@/utils/lastEmail";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 export default function Layout({ children, currentPageName }) {
   const location = useLocation();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [user, setUser] = useState(null);
   const [showTerms, setShowTerms] = useState(false);
   const [showPrivacy, setShowPrivacy] = useState(false);
@@ -30,19 +31,30 @@ export default function Layout({ children, currentPageName }) {
     setIsMenuOpen(false);
   }, [location.pathname]);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+  }, [location.pathname]);
+
   const handleLogout = async () => {
     if (user?.email) {
       setLastEmail(user.email);
     }
+    
+    // ✅ LIMPAR TODO O CACHE ANTES DE DESLOGAR
+    queryClient.clear(); // Limpa TUDO
+    
     await base44.auth.logout();
     setIsMenuOpen(false);
+    navigate(createPageUrl("Login"));
   };
 
   const showHeader = currentPageName !== "Login" && currentPageName !== "Register";
   const showFooter = currentPageName === "Dashboard";
-  const isInvestigationPage = showHeader && ((currentPageName || "").toLowerCase().includes("spy") || (currentPageName || "").toLowerCase().includes("investigation"));
+  const isInvestigationPage = showHeader && currentPageName !== "SMSSpyChat" && ((currentPageName || "").toLowerCase().includes("spy") || (currentPageName || "").toLowerCase().includes("investigation"));
 
-  const { data: layoutUserProfile } = useQuery({
+  const { data: layoutUserProfile, refetch: refetchLayoutProfile } = useQuery({
     queryKey: ["layoutUserProfile", user?.email],
     queryFn: async () => {
       if (!user?.email) return null;
@@ -50,8 +62,18 @@ export default function Layout({ children, currentPageName }) {
       return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
     },
     enabled: showHeader && !!user?.email,
-    staleTime: 60 * 1000,
+    staleTime: 0, // ✅ SEMPRE considerar dados como stale
+    refetchOnMount: 'always', // ✅ SEMPRE refetch ao montar
+    refetchOnWindowFocus: true, // ✅ SEMPRE atualizar ao focar na janela
+    refetchInterval: 5000, // ✅ Atualizar a cada 5 segundos
   });
+
+  // ✅ Forçar refetch quando user carregar
+  useEffect(() => {
+    if (user?.email && showHeader) {
+      refetchLayoutProfile();
+    }
+  }, [user?.email, showHeader, refetchLayoutProfile]);
 
   const credits = layoutUserProfile?.credits ?? 0;
 
@@ -69,6 +91,7 @@ export default function Layout({ children, currentPageName }) {
       OtherNetworksSpy: "Outras Redes",
       DetectiveSpy: "Detetive Particular",
       SMSSpy: "SMS",
+      SMSSpyChat: "SMS - Conversa",
       CallsSpy: "Chamadas",
       CallsSpyResults: "Chamadas",
     };
@@ -124,13 +147,17 @@ export default function Layout({ children, currentPageName }) {
         .pulse-glow {
           animation: pulse-glow 2s infinite;
         }
-
-        .bg-white.border-b.border-gray-200.sticky.top-0.z-10 {
-          display: none;
-        }
       `}</style>
+      
+      {currentPageName !== "SMSSpyChat" && (
+        <style>{`
+          .bg-white.border-b.border-gray-200.sticky.top-0.z-10 {
+            display: none;
+          }
+        `}</style>
+      )}
 
-      {showHeader && (
+      {showHeader && currentPageName !== "SMSSpyChat" && (
         <header
           className="fixed top-0 inset-x-0 z-40"
           style={{ height: '60px', backgroundColor: '#FFFFFF', borderBottom: '1.3px solid rgb(210, 210, 215)' }}
@@ -155,19 +182,25 @@ export default function Layout({ children, currentPageName }) {
                     height: '36px',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'center'
+                    justifyContent: 'center',
+                    zIndex: 10
                   }}
                 >
                   <ArrowLeft className="w-5 h-5 text-gray-700" />
                 </button>
 
+                {/* ✅ CENTRALIZADO NA TELA TODA */}
                 <div
                   style={{
-                    flex: 1,
+                    position: 'absolute',
+                    left: '50%',
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: '10px'
+                    gap: '10px',
+                    pointerEvents: 'none'
                   }}
                 >
                   <img src={fivecon} alt="Serviço" style={{ height: '24px', width: '24px', borderRadius: '5px' }} />
@@ -232,7 +265,7 @@ export default function Layout({ children, currentPageName }) {
         </header>
       )}
 
-      <main className="flex-1" style={{ paddingTop: showHeader ? '60px' : '0' }}>
+      <main className="flex-1" style={{ paddingTop: showHeader && currentPageName !== "SMSSpyChat" ? '60px' : '0' }}>
         {children}
       </main>
 

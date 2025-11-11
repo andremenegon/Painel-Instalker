@@ -32,20 +32,22 @@ export default function WelcomeCard({ user, activeInvestigations, userProfile })
         const newLevel = level + 1;
         const bonusCredits = newLevel * 10;
 
-        playSound('levelup');
-
+        // ✅ NÃO ADICIONAR CRÉDITOS AQUI - apenas atualizar level e XP
         await base44.entities.UserProfile.update(userProfile.id, {
           level: newLevel,
           xp: xp - xpToNextLevel,
-          credits: userProfile.credits + bonusCredits
+          // credits: NÃO TOCAR - será adicionado quando mostrar modal
         });
 
         queryClient.invalidateQueries({ queryKey: ['userProfile'] });
 
+        // Salvar dados para modal + ID do perfil + créditos atuais
         localStorage.setItem('pending_level_up', JSON.stringify({
           newLevel,
           bonusCredits,
-          timestamp: Date.now()
+          timestamp: Date.now(),
+          profileId: userProfile.id,
+          currentCredits: userProfile.credits
         }));
       } catch (error) {
         console.error("Erro ao fazer level up:", error);

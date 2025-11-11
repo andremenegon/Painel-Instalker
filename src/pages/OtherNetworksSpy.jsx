@@ -10,7 +10,7 @@ import { ArrowLeft, CheckCircle2, Loader2, Zap, Lock, AlertTriangle, Trash2, Sha
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
 import { useInvestigationTimer } from "@/hooks/useInvestigationTimer";
-import { ensureTimer, getDurationForInvestigation, resetTimer } from "@/lib/progressManager";
+import { ensureTimer, getDurationForInvestigation, resetTimer, markCompleted } from "@/lib/progressManager";
 
 export default function OtherNetworksSpy() {
   const navigate = useNavigate();
@@ -103,17 +103,17 @@ export default function OtherNetworksSpy() {
     });
   }, []);
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity, // ✅ CACHE INFINITO
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false, // ✅ DESATIVADO
-    refetchOnMount: false, // ✅ DESATIVADO
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [], refetch } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -271,12 +271,16 @@ export default function OtherNetworksSpy() {
       });
       queryClient.invalidateQueries(['userProfile', user?.email]);
 
-      const boost = Math.floor(Math.random() * 11) + 20; // 20% - 30%
-      const newProgress = accelerateTimer(boost);
+      // ✅ OUTRAS REDES: Acelerar completa 100% instantaneamente
+      const boost = 100;
+      accelerateTimer(boost);
+      
+      // Marcar timer como completo no progressManager
+      markCompleted({ service: "Outras Redes", id: activeInvestigation.id });
 
       await base44.entities.Investigation.update(activeInvestigation.id, {
-        progress: newProgress,
-        status: newProgress >= 100 ? "completed" : "processing"
+        progress: 100,
+        status: "completed"
       });
 
       setCreditsSpent(30);
@@ -423,9 +427,11 @@ export default function OtherNetworksSpy() {
   useEffect(() => {
     if (!user || investigations.length === 0) return;
 
+    // ✅ BUSCAR TELEFONE de SMS, Chamadas OU WhatsApp
     const smsInv = investigations.find(inv => inv.service_name === "SMS");
     const callsInv = investigations.find(inv => inv.service_name === "Chamadas");
-    const phone = smsInv?.target_username || callsInv?.target_username || null;
+    const whatsappInv = investigations.find(inv => inv.service_name === "WhatsApp");
+    const phone = smsInv?.target_username || callsInv?.target_username || whatsappInv?.target_username || null;
 
     // ✅ BUSCAR INSTAGRAM CORRETO - INVESTIGAÇÃO MAIS RECENTE
     const instaInvestigations = investigations
@@ -436,19 +442,33 @@ export default function OtherNetworksSpy() {
     const fbInv = investigations.find(inv => inv.service_name === "Facebook");
     const facebook = fbInv?.target_username || null;
 
-    const savedLocation = localStorage.getItem('spy_location_data');
+    // ✅ BUSCAR LOCALIZAÇÃO da investigação de Localização OU do localStorage
+    const locationInv = investigations.find(inv => inv.service_name === "Localização" && inv.status === "completed");
     let city = null;
     let state = null;
     let location = null;
     
-    if (savedLocation) {
-      try {
-        const locationData = JSON.parse(savedLocation);
-        city = locationData.city;
-        state = locationData.state;
-        location = `${city}, ${state}`;
-      } catch (error) {
-        console.error("Erro ao carregar localização:", error);
+    if (locationInv && locationInv.target_username) {
+      // Se temos investigação de localização completa, usar ela
+      location = locationInv.target_username;
+      // Tentar extrair cidade e estado se estiver no formato "Cidade, Estado"
+      const parts = location.split(',');
+      if (parts.length >= 2) {
+        city = parts[0].trim();
+        state = parts[1].trim();
+      }
+    } else {
+      // Fallback: buscar do localStorage
+      const savedLocation = localStorage.getItem('spy_location_data');
+      if (savedLocation) {
+        try {
+          const locationData = JSON.parse(savedLocation);
+          city = locationData.city;
+          state = locationData.state;
+          location = `${city}, ${state}`;
+        } catch (error) {
+          console.error("Erro ao carregar localização:", error);
+        }
       }
     }
 
@@ -477,15 +497,15 @@ export default function OtherNetworksSpy() {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div className="bg-orange-50 border-b border-orange-200 sticky top-0 z-10">
           <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
+            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-orange-100" size="sm">
               <ArrowLeft className="w-4 h-4 mr-1" />
               Voltar
             </Button>
             <h1 className="text-base font-bold text-gray-900">Outras Redes</h1>
             {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
+              <div className="flex items-center gap-1 bg-white rounded-full px-3 py-1 border border-orange-200 shadow-sm">
                 <Zap className="w-3 h-3 text-orange-500" />
                 <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
               </div>
@@ -545,7 +565,12 @@ export default function OtherNetworksSpy() {
               <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded mt-3">
                 <p className="text-xs text-blue-900">
                   <span className="font-bold">⏳ Busca completa em múltiplas plataformas</span><br/>
-                  Tempo estimado: 11 minutos
+                  Tempo estimado: {(() => {
+                    if (loadingProgress >= 100) return 'Concluído!';
+                    const remainingMinutes = Math.ceil((100 - loadingProgress) * 11 / 100);
+                    if (remainingMinutes <= 0) return 'Concluído!';
+                    return `${remainingMinutes} ${remainingMinutes === 1 ? 'minuto' : 'minutos'}`;
+                  })()}
                 </p>
               </div>
             </div>
@@ -618,36 +643,7 @@ export default function OtherNetworksSpy() {
     return (
       <>
         <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-          <div className="bg-white border-b border-gray-200 sticky top-0 z-20 shadow-sm">
-            <div className="max-w-4xl mx-auto px-3 sm:px-4 py-3 flex items-center justify-between">
-              <Button 
-                variant="ghost" 
-                onClick={() => navigate(createPageUrl("Dashboard"))} 
-                className="h-9 px-3 hover:bg-gray-100"
-              >
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Voltar
-              </Button>
-              
-              {userProfile && (
-                <div className="flex items-center gap-2 bg-orange-50 rounded-full px-3 sm:px-4 py-2 border border-orange-200">
-                  <Zap className="w-4 h-4 text-orange-500" />
-                  <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
           <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6 pb-20">
-            <div className="text-center mb-4 sm:mb-6">
-              <div className="inline-flex items-center gap-2 bg-green-50 border border-green-200 rounded-full px-3 sm:px-4 py-1.5 mb-3">
-                <CheckCircle2 className="w-4 h-4 text-green-600" />
-                <span className="text-xs sm:text-sm font-semibold text-green-900">Busca Concluída</span>
-              </div>
-              <h1 className="text-2xl sm:text-3xl font-black text-gray-900 mb-2">47 Plataformas Analisadas</h1>
-              <p className="text-sm sm:text-base text-gray-600">Perfis e atividades encontradas nas redes</p>
-            </div>
-
             <Card className="bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200 p-4 sm:p-5 mb-4 sm:mb-6 shadow-lg">
               <div className="flex items-center gap-3 mb-3 sm:mb-4">
                 <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
@@ -704,7 +700,7 @@ export default function OtherNetworksSpy() {
                   <div className="flex items-center gap-2 sm:gap-3 bg-white/60 backdrop-blur rounded-lg p-2 sm:p-3">
                     <MapPin className="w-4 h-4 sm:w-5 sm:h-5 text-red-600 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-[10px] sm:text-xs text-gray-600 font-medium">Localização (IP)</p>
+                      <p className="text-[10px] sm:text-xs text-gray-600 font-medium">Localização</p>
                       <p className="text-xs sm:text-sm font-bold text-gray-900">{leadData.location}</p>
                     </div>
                   </div>
@@ -714,7 +710,7 @@ export default function OtherNetworksSpy() {
                   <div className="flex items-center gap-2 sm:gap-3 bg-white/60 backdrop-blur rounded-lg p-2 sm:p-3">
                     <MapPin className="w-4 h-4 sm:w-5 sm:h-5 text-red-600 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-[10px] sm:text-xs text-gray-600 font-medium">Localização (IP)</p>
+                      <p className="text-[10px] sm:text-xs text-gray-600 font-medium">Localização</p>
                       <p className="text-xs sm:text-sm font-bold text-gray-900">{leadData.city}, {leadData.state}</p>
                     </div>
                   </div>
@@ -817,12 +813,10 @@ export default function OtherNetworksSpy() {
 
                 <Card className="bg-white p-2 border border-gray-200">
                   <div className="flex items-center gap-2">
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm overflow-hidden">
-                      <img 
-                        src="https://s2-techtudo.glbimg.com/f5K6FXnCmZnRvij2SNsrZSn9Iso=/600x0/filters:quality(70)/https://i.s3.glbimg.com/po/tt2/f/original/2016/01/13/grindraccounts.jpg" 
-                        alt="Twitter/X"
-                        className="w-full h-full object-cover"
-                      />
+                    <div className="w-10 h-10 rounded-xl bg-black flex items-center justify-center flex-shrink-0 shadow-sm">
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="white">
+                        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                      </svg>
                     </div>
                     <div className="flex-1 min-w-0">
                       <h4 className="text-sm font-bold text-gray-900 mb-0.5">Twitter/X</h4>

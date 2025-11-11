@@ -1,5 +1,5 @@
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { base44 } from "@/api/base44Client";
@@ -76,17 +76,17 @@ export default function BuyCredits() {
     refetchOnMount: false,
   });
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity, // ✅ NUNCA ATUALIZA AUTOMATICAMENTE
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false, // ✅ DESATIVADO
-    refetchOnMount: false, // ✅ DESATIVADO
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const packages = [
     {
@@ -142,7 +142,12 @@ export default function BuyCredits() {
         credits: userProfile.credits + totalCredits
       });
 
+      // ✅ INVALIDAR O CACHE CORRETO DO LAYOUT E FORÇAR ATUALIZAÇÃO IMEDIATA
+      await queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
       await queryClient.invalidateQueries({ queryKey: ['userProfile'] });
+      
+      // ✅ FORÇAR REFETCH IMEDIATO
+      await queryClient.refetchQueries({ queryKey: ['layoutUserProfile', user?.email] });
 
       setPurchaseDetails({
         credits: totalCredits,

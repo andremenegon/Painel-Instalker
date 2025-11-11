@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -56,19 +55,17 @@ export default function SMSSpy() {
     retry: 0,
   });
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    initialData: [],
-    enabled: !!user,
-    staleTime: Infinity,
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
-    retry: 0,
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [] } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -92,7 +89,7 @@ export default function SMSSpy() {
 
   // ✅ 3. REDIRECIONAR PARA RESULTS SE JÁ ESTÁ COMPLETED
   useEffect(() => {
-    if (completedSMSInvestigation && currentScreen !== "results") {
+    if (completedSMSInvestigation && (currentScreen === "input" || currentScreen === "loading")) {
       const phone = completedSMSInvestigation.target_username;
       if (!messages || messages.length === 0) {
         generateMessages(phone);
@@ -266,8 +263,7 @@ export default function SMSSpy() {
   const maskPhonePartial = (phone) => {
     const numbers = phone.replace(/\D/g, '');
     const ddd = numbers.slice(0, 2);
-    const firstPart = numbers.slice(2, 7);
-    return `(${ddd}) ${firstPart}-XX**`;
+    return `(${ddd}) *****-****`;
   };
 
   // ✅ MENSAGENS FIXAS - SÓ MUDA O DDD
@@ -333,8 +329,7 @@ export default function SMSSpy() {
         const randomNumber = Math.floor(10000000 + Math.random() * 90000000).toString().slice(0, 7);
         fullPhone = `${ddd} ${randomNumber.slice(0, 3)} ${randomNumber.slice(3)}`;
       } else {
-        const randomNumber = Math.floor(90000 + Math.random() * 10000);
-        fullPhone = `(${ddd}) ${randomNumber}-XX**`;
+        fullPhone = `(${ddd}) *****-****`;
       }
 
       let timeText;
@@ -477,184 +472,184 @@ export default function SMSSpy() {
     // Conversas PICANTES - SEM GÊNERO, APIMENTADAS
     const conversationTemplates = {
       "chifre": [
-        { text: "Pq?? O que aconteceu?", sent: false, delay: -8 },
+        { text: "Pq", sent: false, delay: -8 },
         { text: "A pessoa ta desconfiando", sent: true, delay: -6 },
-        { text: "Sério? Descobriu algo?", sent: false, delay: -4 },
-        { text: "Acho que viu a gente saindo juntos", sent: true, delay: -2 },
-        { text: "Não posso falar com vc no whatsapp", sent: true }
+        { text: "Serio", sent: false, delay: -4 },
+        { text: "Acho q ela viu a gnt", sent: true, delay: -2 },
+        { text: "Nao posso falar no wpp", sent: true }
       ],
       "aqui": [
-        { text: "Vai demorar muito?", sent: false, delay: -30 },
-        { text: "Saindo agora, 10 min", sent: true, delay: -20 },
-        { text: "Ok, to esperando", sent: false, delay: -10 },
-        { text: "To aqui ja, cade vc?", sent: false }
+        { text: "Vai demorar mt", sent: false, delay: -30 },
+        { text: "Saindo agora 10 min", sent: true, delay: -20 },
+        { text: "Ok to esperando", sent: false, delay: -10 },
+        { text: "To aqui ja cade vc", sent: false }
       ],
       "amor": [
         { text: "Oi delicia", sent: false, delay: -8 },
-        { text: "Oi, tudo bem?", sent: true, delay: -5 },
-        { text: "To com saudade de vc", sent: false, delay: -3 },
-        { text: "Também to", sent: true, delay: -1 },
+        { text: "Oi td bem", sent: true, delay: -5 },
+        { text: "To com saudade", sent: false, delay: -3 },
+        { text: "Tb to", sent: true, delay: -1 },
         { text: "Oi amor", sent: false }
       ],
       "wpp": [
-        { text: "Não bloqueei vc", sent: true, delay: -5 },
-        { text: "Ta dizendo que nao existe", sent: false, delay: -3 },
-        { text: "Meu zap ta bugado, me manda msg aqui", sent: true, delay: -1 },
-        { text: "Me desbloqueia no wpp por favor 😢", sent: false }
+        { text: "Me desbloqueia no wpp", sent: false, delay: -5 },
+        { text: "Nao te bloqueei", sent: true, delay: -3 },
+        { text: "Ta falando q nao existe", sent: false, delay: -1 },
+        { text: "Meu zap ta bugado me manda msg aqui", sent: true }
       ],
       "sair": [
-        { text: "E ai, vai dar hoje?", sent: true, delay: -15 },
-        { text: "Acho que sim, que horas?", sent: false, delay: -10 },
-        { text: "Umas 21h no lugar de sempre", sent: true, delay: -5 },
-        { text: "Consegue sair hj a noite?", sent: false }
+        { text: "Consegue sair hj a noite", sent: false, delay: -15 },
+        { text: "Acho q sim q horas", sent: true, delay: -10 },
+        { text: "Umas 21h no lugar de sempre", sent: false, delay: -5 },
+        { text: "E ai vai dar hj", sent: true }
       ],
       "Sumiu": [
         { text: "Oii", sent: false, delay: -10 },
-        { text: "Oi, desculpa demora", sent: true, delay: -5 },
-        { text: "Ta tudo bem?", sent: false, delay: -2 },
-        { text: "Sumiu??", sent: false }
+        { text: "Oi desculpa demora", sent: true, delay: -5 },
+        { text: "Ta tudo bem", sent: false, delay: -2 },
+        { text: "Sumiu", sent: false }
       ],
       "vem": [
-        { text: "Bora se encontrar hj?", sent: false, delay: -8 },
-        { text: "Onde seria?", sent: true, delay: -5 },
+        { text: "Bora se encontrar hj", sent: false, delay: -8 },
+        { text: "Onde seria", sent: true, delay: -5 },
         { text: "Perto da sua casa", sent: false, delay: -2 },
-        { text: "Você vem ou não?", sent: false }
+        { text: "Vc vem ou nao", sent: false }
       ],
       "Bom dia": [
-        { text: "Bom dia! Dormiu bem?", sent: true, delay: -20 },
-        { text: "Que horas dormiu?", sent: false, delay: -15 },
-        { text: "Tarde demais, umas 4h", sent: true, delay: -10 },
-        { text: "To com tesão em vc 🔥", sent: false, delay: -5 },
-        { text: "Bom diaaa ❤️", sent: false }
+        { text: "Bom diaaa", sent: false, delay: -20 },
+        { text: "Bom dia dormiu bem", sent: true, delay: -15 },
+        { text: "Q horas dormiu", sent: false, delay: -10 },
+        { text: "Tarde demais umas 4h", sent: true, delay: -5 },
+        { text: "To com tesao em vc", sent: false }
       ],
       "sumido": [
-        { text: "Oi, desculpa não responder", sent: true, delay: -20 },
-        { text: "Ta ocupado demais pra mim?", sent: false, delay: -15 },
-        { text: "Não é isso, tava sem tempo", sent: true, delay: -10 },
-        { text: "Quando a gente se vê?", sent: false, delay: -5 },
-        { text: "Oi sumido", sent: false }
+        { text: "Oi sumido", sent: false, delay: -20 },
+        { text: "Oi desculpa nao responder", sent: true, delay: -15 },
+        { text: "Ta ocupado demais pra mim", sent: false, delay: -10 },
+        { text: "Nao e isso tava sem tempo", sent: true, delay: -5 },
+        { text: "Qnd a gnt se ve", sent: false }
       ],
       "responder": [
         { text: "Oi", sent: false, delay: -15 },
         { text: "Me responde", sent: false, delay: -10 },
-        { text: "Por favoooor", sent: false, delay: -5 },
-        { text: "Não vai responder não? 😔", sent: false }
+        { text: "Por favor", sent: false, delay: -5 },
+        { text: "Nao vai responder nao", sent: false }
       ],
       "Acabou": [
         { text: "Preciso falar com vc", sent: false, delay: -10 },
         { text: "Fala", sent: true, delay: -8 },
-        { text: "Não da mais", sent: false, delay: -5 },
-        { text: "Não da mais pra continuar", sent: false, delay: -2 },
+        { text: "Nao da mais", sent: false, delay: -5 },
+        { text: "Nao da mais pra continuar", sent: false, delay: -2 },
         { text: "Acabou", sent: false }
       ],
       "bem": [
-        { text: "To sim, e vc?", sent: true, delay: -8 },
-        { text: "Preocupado com vc", sent: false, delay: -5 },
-        { text: "Vc sumiu de repente", sent: false, delay: -2 },
-        { text: "Vc ta bem?", sent: false }
+        { text: "Vc ta bem", sent: false, delay: -8 },
+        { text: "To sim e vc", sent: true, delay: -5 },
+        { text: "Preocupado com vc", sent: false, delay: -2 },
+        { text: "Vc sumiu de repente", sent: false }
       ],
       "Preciso": [
-        { text: "Oi", sent: false, delay: -5 },
-        { text: "É sério", sent: false, delay: -2 },
-        { text: "Preciso falar com vc", sent: true }
+        { text: "Preciso falar com vc", sent: true, delay: -5 },
+        { text: "Oi", sent: false, delay: -2 },
+        { text: "E serio", sent: false }
       ],
       "Deu": [
-        { text: "Acho que sim, deixa eu ver", sent: true, delay: -10 },
-        { text: "Me avisa depois", sent: false, delay: -5 },
-        { text: "Preciso muito te ver", sent: false, delay: -2 },
-        { text: "Deu pra sair hj?", sent: false }
+        { text: "Deu pra sair hj", sent: false, delay: -10 },
+        { text: "Acho q sim deixa eu ver", sent: true, delay: -5 },
+        { text: "Me avisa depois", sent: false, delay: -2 },
+        { text: "Preciso mt te ver", sent: false }
       ],
       "Acordou": [
-        { text: "To acordando agora", sent: true, delay: -30 },
-        { text: "Que horas dormiu?", sent: false, delay: -20 },
-        { text: "Tarde demais, umas 4h", sent: true, delay: -15 },
-        { text: "Fazendo o que ate essa hora?", sent: false, delay: -5 },
-        { text: "Acordou?", sent: false }
+        { text: "Acordou", sent: false, delay: -30 },
+        { text: "To acordando agora", sent: true, delay: -20 },
+        { text: "Q horas dormiu", sent: false, delay: -15 },
+        { text: "Tarde demais umas 4h", sent: true, delay: -5 },
+        { text: "Fazendo oq ate essa hora", sent: false }
       ],
       "fazendo": [
-        { text: "Nada de mais, e vc?", sent: true, delay: -3 },
-        { text: "Pensando em vc", sent: false, delay: -1 },
-        { text: "Tá fazendo oq?", sent: false }
+        { text: "Ta fazendo oq", sent: false, delay: -3 },
+        { text: "Nada de mais e vc", sent: true, delay: -1 },
+        { text: "Pensando em vc", sent: false }
       ],
       "Cade": [
-        { text: "To chegando", sent: true, delay: -8 },
-        { text: "Faz 20min que to esperando", sent: false, delay: -5 },
-        { text: "To esperando aqui", sent: false, delay: -2 },
-        { text: "Cade vc?", sent: false }
+        { text: "Cade vc", sent: false, delay: -8 },
+        { text: "To chegando", sent: true, delay: -5 },
+        { text: "Faz 20min q to esperando", sent: false, delay: -2 },
+        { text: "To esperando aqui", sent: false }
       ],
       "livre": [
-        { text: "Depende, pra que?", sent: true, delay: -5 },
-        { text: "Quero te ver", sent: false, delay: -2 },
-        { text: "Vc livre hj?", sent: false }
+        { text: "Vc livre hj", sent: false, delay: -5 },
+        { text: "Depende pra que", sent: true, delay: -2 },
+        { text: "Quero te ver", sent: false }
       ],
       "parar": [
         { text: "Oi delicia", sent: false, delay: -10 },
-        { text: "Oi, tudo bem?", sent: true, delay: -5 },
-        { text: "Não consigo parar de pensar em vc 🔥", sent: false }
+        { text: "Oi td bem", sent: true, delay: -5 },
+        { text: "Nao consigo parar de pensar em vc", sent: false }
       ],
       "some": [
-        { text: "Desculpa, tava corrido aqui", sent: true, delay: -20 },
-        { text: "Sempre a mesma desculpa", sent: false, delay: -15 },
-        { text: "Quando a gente se vê de verdade?", sent: false, delay: -5 },
-        { text: "Não some assim", sent: false }
+        { text: "Nao some assim", sent: false, delay: -20 },
+        { text: "Desculpa tava corrido aqui", sent: true, delay: -15 },
+        { text: "Sempre a mesma desculpa", sent: false, delay: -5 },
+        { text: "Qnd a gnt se ve de verdade", sent: false }
       ],
       "Saudade": [
-        { text: "Também to com saudade", sent: false, delay: -5 },
-        { text: "Quando vc vem?", sent: true, delay: -2 },
-        { text: "Saudade de vc", sent: true }
+        { text: "Saudade de vc", sent: true, delay: -5 },
+        { text: "Tb to com saudade", sent: false, delay: -2 },
+        { text: "Qnd vc vem", sent: true }
       ],
       "saudade": [
-        { text: "Eu também", sent: true, delay: -15 },
-        { text: "Qnd vc vem?", sent: false, delay: -10 },
-        { text: "Essa semana não vai dar", sent: true, delay: -5 },
-        { text: "Tá estranho cmg 😞", sent: false, delay: -2 },
-        { text: "To com saudade", sent: false }
+        { text: "To com saudade", sent: false, delay: -15 },
+        { text: "Eu tb", sent: true, delay: -10 },
+        { text: "Qnd vc vem", sent: false, delay: -5 },
+        { text: "Essa semana nao vai dar", sent: true, delay: -2 },
+        { text: "Ta estranho cmg", sent: false }
       ],
       "contar": [
-        { text: "Fala, to preocupado", sent: false, delay: -5 },
-        { text: "É complicado falar por aqui", sent: true, delay: -2 },
-        { text: "Preciso te contar uma coisa", sent: true }
+        { text: "Preciso te contar uma coisa", sent: true, delay: -5 },
+        { text: "Fala to preocupado", sent: false, delay: -2 },
+        { text: "E complicado falar por aqui", sent: true }
       ],
       "net": [
-        { text: "Ta ruim mesmo hj", sent: false, delay: -5 },
-        { text: "Atende o telefone", sent: true, delay: -2 },
-        { text: "Tá sem net??", sent: true }
+        { text: "Ta sem net", sent: true, delay: -5 },
+        { text: "Ta ruim mesmo hj", sent: false, delay: -2 },
+        { text: "Atende o telefone", sent: true }
       ],
       "desbloqueia": [
-        { text: "Eu não te bloqueei", sent: false, delay: -10 },
-        { text: "Ta dizendo que o numero não existe", sent: true, delay: -5 },
-        { text: "Estranho, deve ser bug", sent: false, delay: -2 },
-        { text: "Me desbloqueia no wpp por favor 😢", sent: true }
+        { text: "Me desbloqueia no wpp", sent: true, delay: -10 },
+        { text: "Eu nao te bloqueei", sent: false, delay: -5 },
+        { text: "Ta falando q o numero nao existe", sent: true, delay: -2 },
+        { text: "Estranho deve ser bug", sent: false }
       ],
       "bloqueou": [
-        { text: "Descobri que vc namora", sent: false, delay: -8 },
-        { text: "Eu te falei que era complicado", sent: true, delay: -5 },
-        { text: "Não gosto de ser enganado", sent: false, delay: -2 },
-        { text: "Me bloqueou? O que eu fiz?", sent: true }
+        { text: "Me bloqueou pq", sent: true, delay: -8 },
+        { text: "Descobri q vc namora", sent: false, delay: -5 },
+        { text: "Eu te falei q era complicado", sent: true, delay: -2 },
+        { text: "Nao gosto de ser enganado", sent: false }
       ],
       "não posso": [
-        { text: "Por que não?", sent: false, delay: -10 },
-        { text: "A pessoa ta desconfiando", sent: true, delay: -5 },
-        { text: "De novo isso?", sent: false, delay: -2 },
-        { text: "Não posso falar com vc no whatsapp", sent: true }
+        { text: "Nao posso falar no wpp", sent: true, delay: -10 },
+        { text: "Pq nao", sent: false, delay: -5 },
+        { text: "A pessoa ta desconfiando", sent: true, delay: -2 },
+        { text: "De novo isso", sent: false }
       ],
       "tesão": [
-        { text: "Também to pensando nisso", sent: true, delay: -10 },
-        { text: "Vem logo então", sent: false, delay: -5 },
-        { text: "To saindo", sent: true, delay: -2 },
-        { text: "To com tesão em vc", sent: false }
+        { text: "To com tesao em vc", sent: false, delay: -10 },
+        { text: "Tb to pensando nisso", sent: true, delay: -5 },
+        { text: "Vem logo entao", sent: false, delay: -2 },
+        { text: "To saindo", sent: true }
       ],
       "delicia": [
-        { text: "Oii 😏", sent: true, delay: -8 },
-        { text: "Que saudade de vc", sent: false, delay: -5 },
-        { text: "Também to com saudade", sent: true, delay: -2 },
-        { text: "Oi delicia", sent: false }
+        { text: "Oi delicia", sent: false, delay: -8 },
+        { text: "Oii", sent: true, delay: -5 },
+        { text: "Q saudade de vc", sent: false, delay: -2 },
+        { text: "Tb to com saudade", sent: true }
       ],
       "vontade": [
-        { text: "Também to", sent: true, delay: -10 },
-        { text: "Bora se ver hj?", sent: false, delay: -5 },
-        { text: "Vou ver se consigo", sent: true, delay: -2 },
-        { text: "To com vontade de vc", sent: false }
+        { text: "To com vontade de vc", sent: false, delay: -10 },
+        { text: "Tb to", sent: true, delay: -5 },
+        { text: "Bora se ver hj", sent: false, delay: -2 },
+        { text: "Vou ver se consigo", sent: true }
       ]
     };
 
@@ -720,11 +715,26 @@ export default function SMSSpy() {
       baseTime = new Date(now.getTime() - 60 * 60 * 1000);
     }
 
+    // ✅ CALCULAR HORÁRIOS CORRETAMENTE
+    // A última mensagem (preview) sempre tem o horário base
+    // Mensagens anteriores têm horários progressivamente mais antigos
     const result = chatTexts.map((msg, i) => {
-      const minutesBefore = msg.delay !== undefined
-        ? Math.abs(msg.delay)
-        : (chatTexts.length - 1 - i) * (2 + Math.floor(Math.random() * 3));
-      const msgTime = new Date(baseTime.getTime() - minutesBefore * 60 * 1000);
+      let msgTime;
+      
+      if (i === chatTexts.length - 1) {
+        // Última mensagem = horário da preview (baseTime)
+        msgTime = new Date(baseTime.getTime());
+      } else if (msg.delay !== undefined) {
+        // Usar delay definido (em minutos)
+        const minutesBefore = Math.abs(msg.delay);
+        msgTime = new Date(baseTime.getTime() - minutesBefore * 60 * 1000);
+      } else {
+        // Distribuir uniformemente as mensagens anteriores
+        const totalMessages = chatTexts.length - 1;
+        const positionFromEnd = totalMessages - i;
+        const minutesBefore = positionFromEnd * (3 + Math.floor(Math.random() * 5));
+        msgTime = new Date(baseTime.getTime() - minutesBefore * 60 * 1000);
+      }
 
       return {
         ...msg,
@@ -769,7 +779,8 @@ export default function SMSSpy() {
         target_username: phone,
         status: "processing",
         progress: 1,
-        estimated_days: 0
+        estimated_days: 0,
+        created_by: user?.email || ''
       });
 
       setCreditsSpent(30);
@@ -779,7 +790,10 @@ export default function SMSSpy() {
 
       // ✅ Update the cache directly instead of refetching for immediate UI consistency
       queryClient.setQueryData(['investigations', user?.email], (oldData) => {
-        return oldData ? [...oldData, newInvestigation] : [newInvestigation];
+        if (!oldData) return [newInvestigation];
+        // Evitar duplicatas caso já exista uma investigação ativa para este serviço
+        const withoutSms = oldData.filter(inv => inv.id !== newInvestigation.id);
+        return [...withoutSms, newInvestigation];
       });
 
       setCurrentScreen("loading");
@@ -990,13 +1004,17 @@ export default function SMSSpy() {
     playSound('click');
 
     if (unlockedChats.includes(message.phone)) {
-      // ✅ GARANTIR QUE GERA MENSAGENS E VAI PARA CHAT
+      // ✅ NAVEGAR PARA PÁGINA DE CHAT
       const chatMessages = generateChatMessages(message.phone, message.preview, message.time);
-      setSelectedChat({
+      navigate(createPageUrl("SMSSpyChat"), {
+        state: {
+          selectedChat: {
         ...message,
         messages: chatMessages
+          },
+          phoneNumber: phoneNumber
+        }
       });
-      setCurrentScreen("chat");
     } else {
       setSelectedChat(message);
       setShowUnlockModal(true);
@@ -1005,11 +1023,11 @@ export default function SMSSpy() {
 
   const handleUnlockChat = async () => {
     try {
-      if (!userProfile || userProfile.credits < 15) {
+      if (!userProfile || userProfile.credits < 20) {
         playSound('error');
         setAlertConfig({
           title: "Créditos Insuficientes",
-          message: "Você precisa de 15 créditos para desbloquear esta conversa.",
+          message: "Você precisa de 20 créditos para desbloquear esta conversa.",
           confirmText: "Comprar Créditos",
           onConfirm: () => {
             setShowAlertModal(false);
@@ -1023,8 +1041,8 @@ export default function SMSSpy() {
 
       playSound('unlock');
       await base44.entities.UserProfile.update(userProfile.id, {
-        credits: userProfile.credits - 15,
-        xp: userProfile.xp + 8
+        credits: userProfile.credits - 20,
+        xp: userProfile.xp + 10
       });
       queryClient.invalidateQueries(['userProfile', user?.email]);
 
@@ -1032,19 +1050,24 @@ export default function SMSSpy() {
       setUnlockedChats(newUnlockedChats);
       localStorage.setItem(`sms_unlocked_${phoneNumber}`, JSON.stringify(newUnlockedChats));
 
-      setCreditsSpent(15);
-      setXpGained(8);
+      setCreditsSpent(20);
+      setXpGained(10);
       setShowCreditAlert(true);
       setTimeout(() => setShowCreditAlert(false), 3000);
 
-      // ✅ GERAR MENSAGENS E MUDAR TELA
+      // ✅ GERAR MENSAGENS E NAVEGAR PARA PÁGINA DE CHAT
       const chatMessages = generateChatMessages(selectedChat.phone, selectedChat.preview, selectedChat.time);
-      setSelectedChat({
+      setShowUnlockModal(false);
+      
+      navigate(createPageUrl("SMSSpyChat"), {
+        state: {
+          selectedChat: {
         ...selectedChat,
         messages: chatMessages
+          },
+          phoneNumber: phoneNumber
+        }
       });
-      setShowUnlockModal(false); // ✅ FECHAR MODAL ANTES
-      setCurrentScreen("chat"); // ✅ DEPOIS MUDAR TELA
     } catch (error) {
       console.error("Erro ao desbloquear chat:", error);
       setAlertConfig({
@@ -1151,22 +1174,6 @@ export default function SMSSpy() {
   if (currentScreen === "input") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            <h1 className="text-base font-bold text-gray-900">SMS</h1>
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
         <div className="w-full max-w-2xl mx-auto p-3">
           <Card className="bg-white border-0 shadow-md p-6">
             <div className="text-center mb-6">
@@ -1226,73 +1233,53 @@ export default function SMSSpy() {
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            <h1 className="text-base font-bold text-gray-900">SMS</h1>
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
         <div className="w-full max-w-2xl mx-auto p-3">
-          <div className="text-center mb-4">
-            <h1 className="text-2xl font-bold text-[#2D3748] mb-1">💬 Investigação SMS</h1>
-          </div>
-
-          <Card className="bg-white border-0 shadow-md p-6 mb-3">
-            <div className="flex flex-col items-center justify-center py-8">
-              <div className="relative mb-6">
-                <div className="absolute inset-0 w-20 h-20 rounded-full bg-orange-200 animate-ping opacity-75"></div>
-                <div className="absolute inset-2 w-16 h-16 rounded-full bg-orange-300 animate-pulse"></div>
-                <div className="relative w-20 h-20 rounded-full bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
-                  <MessageCircle className="w-10 h-10 text-white animate-bounce" />
+          <Card className="bg-white border-0 shadow-md p-4 mb-3">
+            <div className="flex flex-col items-center justify-center py-4">
+              <div className="relative mb-4">
+                <div className="absolute inset-0 w-16 h-16 rounded-full bg-orange-200 animate-ping opacity-75"></div>
+                <div className="absolute inset-2 w-12 h-12 rounded-full bg-orange-300 animate-pulse"></div>
+                <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
+                  <MessageCircle className="w-8 h-8 text-white animate-bounce" />
                 </div>
               </div>
 
-              <h3 className="text-lg font-bold text-gray-900 mb-2">🔍 Analisando SMS</h3>
-              <p className="text-sm text-gray-600 text-center mb-1">
-                Número: {phoneNumber}
+              <h3 className="text-base font-bold text-gray-900 mb-1">🔍 Analisando SMS</h3>
+              <p className="text-sm text-gray-600 text-center">
+                {phoneNumber}
               </p>
-              <p className="text-xs text-gray-500 mb-4">
+              <p className="text-xs text-gray-500 mb-3">
                 Tempo estimado: 3 minutos
               </p>
 
-              <div className="w-full max-w-xs mb-6">
+              <div className="w-full mb-4">
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
                     className="h-2 bg-gradient-to-r from-orange-500 to-orange-600 rounded-full transition-all duration-500"
                     style={{ width: `${loadingProgress}%` }}
                   />
                 </div>
-                <p className="text-xs text-gray-600 text-center mt-1">{loadingProgress}%</p>
+                <p className="text-xs text-gray-600 text-center mt-1 font-semibold">{loadingProgress}%</p>
               </div>
 
-              <div className="space-y-2 w-full">
+              <div className="space-y-1.5 w-full">
                 {steps.map(step => (
                   <div
                     key={step.id}
                     className={`flex items-center gap-2 p-2 rounded-lg ${
                       step.completed ? 'bg-green-50 border-l-2 border-green-500' :
-                      step.active ? 'bg-orange-50 border-l-4 border-orange-500' :
+                      step.active ? 'bg-orange-50 border-l-3 border-orange-500' :
                       'opacity-40'
                     }`}
                   >
                     {step.completed ? (
-                      <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                      <CheckCircle2 className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
                     ) : step.active ? (
-                      <Loader2 className="w-4 h-4 text-orange-600 flex-shrink-0 animate-spin" />
+                      <Loader2 className="w-3.5 h-3.5 text-orange-600 flex-shrink-0 animate-spin" />
                     ) : (
-                      <div className="w-4 h-4 rounded-full border-2 border-gray-300 flex-shrink-0" />
+                      <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 flex-shrink-0" />
                     )}
-                    <p className={`text-xs font-medium ${
+                    <p className={`text-[11px] font-medium leading-tight ${
                       step.completed ? 'text-green-900' :
                       step.active ? 'text-gray-900' :
                       'text-gray-500'
@@ -1306,24 +1293,22 @@ export default function SMSSpy() {
           </Card>
 
           {showAccelerateButton && loadingProgress < 100 && (
-            <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-3 shadow-sm border border-orange-200">
-              <p className="text-center text-gray-600 text-xs mb-2">A análise está demorando...</p>
               <Button
                 onClick={handleAccelerate}
-                className="w-full h-10 bg-orange-500 hover:bg-orange-600 text-white font-semibold text-sm rounded-lg"
+              className="w-full h-10 bg-orange-500 hover:bg-orange-600 text-white font-semibold text-sm rounded-xl mb-3"
               >
                 <Zap className="w-4 h-4 mr-2" />
-                Acelerar e Concluir Agora - 30 créditos
+              Acelerar Agora - 30 créditos
               </Button>
-            </div>
           )}
 
-          <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded mt-3">
-            <p className="text-xs text-blue-900">
-              ⏱️ <span className="font-bold">Aguarde alguns instantes</span><br/>
-              Estamos recuperando o histórico completo de SMS
-            </p>
-          </div>
+          <Button
+            onClick={handleDeleteInvestigation}
+            variant="outline"
+            className="w-full h-10 border border-red-200 text-red-600 hover:bg-red-50 font-medium text-sm rounded-xl"
+          >
+            Cancelar Investigação
+          </Button>
         </div>
 
         {showCreditAlert && (
@@ -1346,79 +1331,110 @@ export default function SMSSpy() {
 
   if (currentScreen === "results") {
     const remainingMessages = filteredMessages.length - visibleMessages;
+    const unlockedCount = unlockedChats.length;
+    const spamCount = messages.filter(m => m.isSpam).length;
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            <h1 className="text-base font-bold text-gray-900">💬 SMS</h1>
-            <div className="flex items-center gap-2">
-              {userProfile && (
-                <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                  <Zap className="w-3 h-3 text-orange-500" />
-                  <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
         <div className="w-full max-w-2xl mx-auto p-3">
+          {/* Card de informações do número */}
+          <Card className="bg-gradient-to-r from-orange-50 to-orange-100 border-orange-200 shadow-sm p-4 mb-3">
+            <div>
+              <p className="text-xs text-orange-600 font-semibold mb-1">NÚMERO RASTREADO</p>
+              <p className="text-lg font-bold text-gray-900">{phoneNumber}</p>
+            </div>
+          </Card>
+
           <div className="relative mb-3">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <Input
               placeholder="Buscar SMS..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 h-11 border-2 border-gray-200 focus:border-orange-400"
+              className="pl-10 h-11 border-0 focus:ring-0 focus:border-0 rounded-xl text-sm shadow-sm"
+              style={{ backgroundColor: '#FFFFFF' }}
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-2 mb-4">
+          <div className="grid grid-cols-4 gap-2 mb-4">
             <Card className="bg-white border-0 shadow-sm p-3 text-center">
-              <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-              <p className="text-xs text-gray-600">Total</p>
+              <p className="text-xl font-bold text-gray-900">{stats.total}</p>
+              <p className="text-[10px] text-gray-600">Total</p>
             </Card>
             <Card className="bg-white border-0 shadow-sm p-3 text-center">
-              <p className="text-2xl font-bold text-gray-900">{stats.received}</p>
-              <p className="text-xs text-gray-600">Recebidas</p>
+              <p className="text-xl font-bold text-gray-900">{stats.received}</p>
+              <p className="text-[10px] text-gray-600">Recebidas</p>
             </Card>
             <Card className="bg-white border-0 shadow-sm p-3 text-center">
-              <p className="text-2xl font-bold text-gray-900">{stats.sameDDD}</p>
-              <p className="text-xs text-gray-600">DDD {getDDD(phoneNumber)}</p>
+              <p className="text-xl font-bold text-orange-600">{stats.sameDDD}</p>
+              <p className="text-[10px] text-gray-600">DDD {getDDD(phoneNumber)}</p>
+            </Card>
+            <Card className="bg-white border-0 shadow-sm p-3 text-center">
+              <p className="text-xl font-bold text-red-600">{spamCount}</p>
+              <p className="text-[10px] text-gray-600">Spam</p>
             </Card>
           </div>
 
-          <h3 className="text-sm font-bold text-gray-900 mb-2">Mensagens ({filteredMessages.length} total)</h3>
+          <div className="mb-2">
+            <h3 className="text-sm font-bold text-gray-900">Mensagens ({filteredMessages.length} total)</h3>
+          </div>
 
           <div className="space-y-2 mb-3">
-            {filteredMessages.slice(0, visibleMessages).map((msg) => (
+            {filteredMessages.slice(0, visibleMessages).map((msg) => {
+              const isUnlocked = unlockedChats.includes(msg.phone);
+              const isSpam = msg.isSpam;
+              
+              return (
               <Card
                 key={msg.id}
                 onClick={() => handleMessageClick(msg)}
-                className="bg-white border-0 shadow-sm p-3 cursor-pointer hover:shadow-md transition-shadow"
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
+                  className={`border-0 shadow-sm p-3 cursor-pointer hover:shadow-md transition-all hover:scale-[1.01] ${
+                    isUnlocked ? 'bg-green-50 border-l-4 border-green-500' : 
+                    isSpam ? 'bg-gray-50' : 
+                    'bg-white'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    {/* Avatar/Icon */}
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      isUnlocked ? 'bg-green-200' : 
+                      isSpam ? 'bg-gray-300' : 
+                      msg.sameDDD ? 'bg-orange-200' : 'bg-blue-200'
+                    }`}>
+                      <span className="text-lg">
+                        {isUnlocked ? '✓' : 
+                         isSpam ? '⚠️' : 
+                         msg.sameDDD ? '📱' : '💬'}
+                      </span>
+                    </div>
+                    
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between mb-1">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <p className="text-sm font-bold text-gray-900">{msg.phone}</p>
                       {msg.sameDDD && (
                         <Badge className="bg-orange-100 text-orange-700 border-0 text-[10px]">MESMO DDD</Badge>
                       )}
+                            {isSpam && (
+                              <Badge className="bg-red-100 text-red-700 border-0 text-[10px]">SPAM</Badge>
+                            )}
                     </div>
-                    <p className="text-xs text-gray-500 mb-1">{msg.time}</p>
+                          <p className="text-[11px] text-gray-500">{msg.time}</p>
                   </div>
-                  {unlockedChats.includes(msg.phone) && (
-                    <Badge className="bg-green-100 text-green-700 border-0 text-[10px]">DESBLOQUEADO</Badge>
+                        {isUnlocked && (
+                          <Badge className="bg-green-600 text-white border-0 text-[10px] ml-2">✓ ABERTO</Badge>
                   )}
                 </div>
-                <p className="text-xs text-gray-700">{msg.preview}</p>
+                      <p className={`text-xs ${isSpam ? 'text-gray-500' : 'text-gray-700'} line-clamp-2`}>
+                        {msg.preview}
+                      </p>
+                    </div>
+                  </div>
               </Card>
-            ))}
+              );
+            })}
           </div>
 
           {remainingMessages > 0 && (
@@ -1474,7 +1490,7 @@ export default function SMSSpy() {
               </div>
               <div className="space-y-2">
                 <Button onClick={handleUnlockChat} className="w-full h-11 bg-orange-500 hover:bg-orange-600 text-white font-bold">
-                  Ver Conversa Completa - 15 créditos
+                  Ver Conversa Completa - 20 créditos
                 </Button>
                 <Button onClick={() => setShowUnlockModal(false)} variant="outline" className="w-full h-10">
                   Cancelar
@@ -1498,143 +1514,33 @@ export default function SMSSpy() {
             </div>
           </div>
         )}
+
+        <ConfirmModal
+          isOpen={showConfirmDelete}
+          onConfirm={confirmDelete}
+          onCancel={() => setShowConfirmDelete(false)}
+          title="Apagar Investigação?"
+          message="⚠️ Todos os dados desta investigação serão perdidos permanentemente, e os créditos gastos não serão reembolsados."
+          confirmText="Sim, apagar"
+          cancelText="Cancelar"
+          type="danger"
+        />
+
+        <ConfirmModal
+          isOpen={showAlertModal}
+          onConfirm={alertConfig.onConfirm || (() => setShowAlertModal(false))}
+          onCancel={() => setShowAlertModal(false)}
+          title={alertConfig.title}
+          message={alertConfig.message}
+          confirmText={alertConfig.confirmText}
+          cancelText="Voltar"
+          type="default"
+        />
       </div>
     );
   }
 
-  if (currentScreen === "chat" && selectedChat) {
-    const hasDeletedMessages = selectedChat.messages.some(m => m.isDeleted);
-
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0] flex flex-col">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => setCurrentScreen("results")} className="h-9 px-3 hover:bg-gray-100" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            <div className="text-center flex-1">
-              <p className="text-sm font-bold text-gray-900">{selectedChat.phone}</p>
-              {selectedChat.sameDDD && (
-                <Badge className="bg-orange-100 text-orange-700 border-0 text-[10px] mt-0.5">MESMO DDD</Badge>
-              )}
-            </div>
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          {selectedChat.messages.map((msg, idx) => (
-            <div key={idx}>
-              {msg.isDeleted ? (
-                <div className="flex justify-center">
-                  <div className="bg-gray-100 rounded-lg px-4 py-2 max-w-[70%]">
-                    <p className="text-xs text-gray-500 italic text-center">🔒 Mensagem deletada</p>
-                  </div>
-                </div>
-              ) : (
-                <div className={`flex ${msg.sent ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[75%] rounded-2xl px-4 py-2 ${
-                    msg.sent
-                      ? 'bg-blue-500 text-white rounded-br-sm'
-                      : 'bg-white text-gray-900 rounded-bl-sm shadow-sm'
-                  }`}>
-                    <p className="text-sm">{msg.text}</p>
-                    <p className={`text-[10px] mt-1 ${msg.sent ? 'text-blue-100' : 'text-gray-500'}`}>
-                      {msg.time}
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {hasDeletedMessages && (
-          <Card className="bg-white border-0 shadow-lg p-4 m-3 rounded-xl">
-            <div className="text-center mb-3">
-              <p className="text-sm font-bold text-gray-900 mb-1">🔓 Recuperar Mensagens Deletadas</p>
-              <p className="text-xs text-gray-600">Veja o que foi apagado desta conversa</p>
-            </div>
-            <Button
-              onClick={async () => {
-                try {
-                  if (!userProfile || userProfile.credits < 20) {
-                    playSound('error');
-                    setAlertConfig({
-                      title: "Créditos Insuficientes",
-                      message: "Você precisa de 20 créditos para recuperar as mensagens deletadas desta conversa.",
-                      confirmText: "Comprar Créditos",
-                      onConfirm: () => {
-                        setShowAlertModal(false);
-                        navigate(createPageUrl("BuyCredits"));
-                      }
-                    });
-                    setShowAlertModal(true);
-                    return;
-                  }
-
-                  await base44.entities.UserProfile.update(userProfile.id, {
-                    credits: userProfile.credits - 20,
-                    xp: userProfile.xp + 10
-                  });
-                  queryClient.invalidateQueries(['userProfile', user?.email]); // Replaced setUserProfile with query invalidation
-
-
-                  setCreditsSpent(20);
-                  setXpGained(10);
-                  setShowCreditAlert(true);
-                  setTimeout(() => setShowCreditAlert(false), 3000);
-
-                  const revealedMessages = selectedChat.messages.map(m => {
-                    if (m.isDeleted) {
-                      const suspiciousTexts = [
-                        "vem aqui, to sozinho",
-                        "sdd de vc s2",
-                        "to pensando em vc",
-                        "queria te ver agora",
-                        "❤️❤️❤️❤️"
-                      ];
-                      return {
-                        ...m,
-                        text: suspiciousTexts[Math.floor(Math.random() * suspiciousTexts.length)],
-                        sent: Math.random() < 0.5,
-                        isDeleted: false
-                      };
-                    }
-                    return m;
-                  });
-
-                  setSelectedChat({
-                    ...selectedChat,
-                    messages: revealedMessages
-                  });
-
-                } catch (error) {
-                  console.error("Erro ao recuperar mensagens:", error);
-                  setAlertConfig({
-                    title: "Erro ao recuperar mensagens",
-                    message: "Ocorreu um erro ao tentar recuperar mensagens deletadas. Por favor, tente novamente.",
-                    confirmText: "Ok",
-                    onConfirm: () => setShowAlertModal(false)
-                  });
-                  setShowAlertModal(true);
-                }
-              }}
-              className="w-full h-11 bg-red-500 hover:bg-red-600 text-white font-bold"
-            >
-              Desbloquear por 20 créditos
-            </Button>
-          </Card>
-        )}
-      </div>
-    );
-  }
+  // ✅ Tela de chat foi movida para SMSSpyChat.jsx
 
   return (
     <>

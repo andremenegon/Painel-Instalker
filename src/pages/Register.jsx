@@ -5,10 +5,11 @@ import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { User, Mail, Lock, Sparkles } from "lucide-react";
+import { User, Mail, Lock, Sparkles, Eye, EyeOff } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import logoFull from "@/assets/branding/instalker-logo-full.png";
 import { setLastEmail } from "@/utils/lastEmail";
+import { Toast } from "@/components/Toast";
 
 export default function Register() {
   const navigate = useNavigate();
@@ -22,10 +23,13 @@ export default function Register() {
   const [showTerms, setShowTerms] = useState(false);
   const [emailError, setEmailError] = useState("");
   const [passwordError, setPasswordError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
 
   const meetsPasswordRules = (password) => {
     if (!password) return false;
-    const hasMinLength = password.length > 8;
+    const hasMinLength = password.length >= 8;
     const hasSpecialCharacter = /[^A-Za-z0-9]/.test(password);
     return hasMinLength && hasSpecialCharacter;
   };
@@ -41,7 +45,7 @@ export default function Register() {
     
     // Validar regras da senha
     if (!meetsPasswordRules(formData.password)) {
-      setPasswordError("A senha deve ter mais de 8 caracteres e pelo menos 1 caractere especial.");
+      setPasswordError("A senha deve ter no mínimo 8 caracteres e pelo menos 1 caractere especial.");
       return;
     }
 
@@ -50,7 +54,7 @@ export default function Register() {
     setLoading(true);
     
     try {
-      // Registrar usuário no mock (se estiver usando mock)
+      // Registrar usuário
       if (formData.email && formData.full_name && formData.password) {
         await base44.auth.register({
           email: formData.email,
@@ -63,11 +67,65 @@ export default function Register() {
       navigate(createPageUrl("Dashboard"));
     } catch (error) {
       console.error("Erro ao registrar:", error);
-      // Continuar mesmo com erro (modo mock)
-      setLastEmail(formData.email);
-      navigate(createPageUrl("Dashboard"));
+      
+      // Se o email já existe, redirecionar para login com os dados preenchidos
+      if (error.message && error.message.includes('já cadastrado')) {
+        // Salvar email e senha para preencher no login
+        setLastEmail(formData.email);
+        localStorage.setItem('pending_login_password', formData.password);
+        
+        // Redirecionar para login com mensagem
+        navigate(createPageUrl("Login"), {
+          state: {
+            message: 'Você já tem uma conta criada! Entre com suas credenciais.',
+            email: formData.email,
+            password: formData.password
+          }
+        });
+      } else {
+        // Outros erros
+        setPasswordError(`Erro ao criar conta: ${error.message || 'Tente novamente'}`);
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Verificar se o email já existe no banco
+  const checkEmailExists = async (email) => {
+    if (!email || email.length < 5) return;
+    
+    try {
+      // Buscar no banco se o email já existe
+      const users = await base44.entities.User.filter({ email });
+      
+        if (users && users.length > 0) {
+          const user = users[0];
+          
+          // Email já existe - mostrar toast e redirecionar
+          setToastMessage("Você já é um usuário In'Stalker!");
+          setShowToast(true);
+          setLastEmail(email);
+          
+          // Salvar senha para preencher no login
+          localStorage.setItem('temp_login_password', user.password || '');
+        
+          // Redirecionar após 2.5 segundos
+          setTimeout(() => {
+            navigate(createPageUrl("Login"), {
+              state: {
+                email: email,
+                password: user.password || '',
+                userName: user.full_name || 'usuário',
+                fromRegister: true,
+                showToast: true
+              }
+            });
+          }, 2500);
+      }
+    } catch (error) {
+      // Ignorar erros de verificação
+      console.error('Erro ao verificar email:', error);
     }
   };
 
@@ -82,12 +140,16 @@ export default function Register() {
     }
   };
 
-  const handleConfirmEmailChange = (e) => {
-    setFormData({...formData, confirm_email: e.target.value});
-    if (e.target.value !== formData.email) {
+  const handleConfirmEmailChange = async (e) => {
+    const confirmEmail = e.target.value;
+    setFormData({...formData, confirm_email: confirmEmail});
+    
+    if (confirmEmail !== formData.email) {
       setEmailError("Os emails não coincidem");
     } else {
       setEmailError("");
+      // Verificar se o email já existe quando os emails coincidem
+      await checkEmailExists(formData.email);
     }
   };
 
@@ -184,15 +246,25 @@ export default function Register() {
                   <Lock className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
                   <Input
                     id="password"
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     placeholder="Crie uma senha forte"
                     value={formData.password}
                     onChange={(e) => handlePasswordChange(e.target.value)}
-                    className={`pl-9 h-10 text-sm focus:border-orange-400 focus:ring-orange-400 ${passwordError ? 'border-red-300' : 'border-orange-200'}`}
+                    className={`pl-9 pr-10 h-10 text-sm focus:border-orange-400 focus:ring-orange-400 ${passwordError ? 'border-red-300' : 'border-orange-200'}`}
                     required
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 transition-colors"
+                    title={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
+              
+
               {passwordError && (
                 <p className="text-xs text-red-500 mt-1">{passwordError}</p>
               )}
@@ -274,6 +346,15 @@ export default function Register() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Toast de notificação */}
+      {showToast && (
+        <Toast
+          message={toastMessage}
+          type="info"
+          onClose={() => setShowToast(false)}
+        />
       )}
 
     </div>

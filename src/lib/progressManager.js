@@ -12,11 +12,11 @@ const SERVICE_DEFAULT_DURATIONS = {
   Instagram: 5 * DAY_MS,
   WhatsApp: 7 * DAY_MS,
   Facebook: 7 * DAY_MS,
-  'Outras Redes': 6 * DAY_MS,
+  'Outras Redes': 11 * MINUTE_MS,
   Localização: 5 * MINUTE_MS,
   SMS: 3 * MINUTE_MS,
   Chamadas: 4 * MINUTE_MS,
-  Câmera: 12 * HOUR_MS,
+  Câmera: 3 * DAY_MS,
   'Detetive Particular': 14 * DAY_MS,
   Investigation: 5 * DAY_MS,
 };
@@ -33,7 +33,7 @@ const SERVICE_MIN_PROGRESS = {
   'Detetive Particular': 0.01,
 };
 
-const FULL_COMPLETION_SERVICES = new Set(['Instagram', 'WhatsApp', 'Facebook']);
+const FULL_COMPLETION_SERVICES = new Set(['Instagram', 'WhatsApp', 'Facebook', 'Outras Redes']);
 
 const isBrowser = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 

@@ -28,6 +28,7 @@ export default function CallsSpy() {
   const progressTimerRef = useRef(null); 
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [alertConfig, setAlertConfig] = useState({});
+  const [autoStartPhone, setAutoStartPhone] = useState(null);
 
   // ✅ FUNÇÃO DE SOM UNIVERSAL
   const playSound = (type) => {
@@ -91,18 +92,17 @@ export default function CallsSpy() {
     retry: 0, // ✅ ZERO RETRIES
   });
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user?.email }),
-    enabled: !!user,
-    staleTime: Infinity, // ✅ CACHE INFINITO
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false, // ✅ DESATIVADO
-    refetchOnMount: false, // ✅ DESATIVADO
-    retry: 0, // ✅ ZERO RETRIES
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user?.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [], refetch } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -168,10 +168,8 @@ export default function CallsSpy() {
     if (whatsappInvestigation || smsInvestigation) {
       const phone = whatsappInvestigation?.target_username || smsInvestigation?.target_username;
       setPhoneNumber(phone);
-      // Removed startInvestigation(phone) call here to prevent duplicate investigations
-      // The user will need to explicitly click 'Iniciar Investigação' if auto-start doesn't find an active/completed CallsSpy investigation.
-      // This matches the behavior if no other investigations are found.
-      setCurrentScreen("input");
+      // ✅ MARCAR PARA INICIAR INVESTIGAÇÃO AUTOMATICAMENTE
+      setAutoStartPhone(phone);
       return;
     }
     
@@ -312,14 +310,15 @@ export default function CallsSpy() {
       });
       
       // Invalidate userProfile query to refetch updated credits/xp
-      queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
+      queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
 
       await base44.entities.Investigation.create({
         service_name: "Chamadas",
         target_username: phone,
         status: "processing",
         progress: 1,
-        estimated_days: 5 // Updated to 5 days estimate
+        estimated_days: 5, // Updated to 5 days estimate
+        created_by: user?.email || ''
       });
       
       setCreditsSpent(25);
@@ -347,6 +346,15 @@ export default function CallsSpy() {
     }
   };
 
+  // ✅ USEEFFECT PARA INICIAR AUTOMATICAMENTE QUANDO autoStartPhone MUDAR
+  useEffect(() => {
+    if (autoStartPhone && userProfile && !activeCallsInvestigation && !completedCallsInvestigation) {
+      startInvestigation(autoStartPhone);
+      setAutoStartPhone(null); // Limpar para não iniciar novamente
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStartPhone, activeCallsInvestigation, completedCallsInvestigation, userProfile]);
+
   const handleAccelerate = async () => {
     try {
       if (!userProfile || userProfile.credits < 30) {
@@ -371,7 +379,7 @@ export default function CallsSpy() {
       });
       
       // Invalidate userProfile query to refetch updated credits/xp
-      queryClient.invalidateQueries({ queryKey: ['userProfile', user?.email] });
+      queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
 
       setLoadingProgress(100);
       
@@ -424,32 +432,33 @@ export default function CallsSpy() {
       { id: 6, text: "Gerando relatório...", threshold: 90 }
     ];
 
-    return steps.map(step => ({
+    return steps.map((step, index) => {
+      // Primeiro passo (Número verificado) sempre completed
+      if (step.id === 1) {
+        return { ...step, completed: true, active: false };
+      }
+      
+      // Último passo só completa quando progress >= 100
+      if (step.id === 6) {
+        return {
+          ...step,
+          completed: progress >= 100,
+          active: progress >= step.threshold && progress < 100
+        };
+      }
+      
+      // Outros passos
+      return {
       ...step,
-      completed: progress > step.threshold + 5,
-      active: progress >= step.threshold && progress <= step.threshold + 10
-    }));
+        completed: progress > step.threshold + 20,
+        active: progress >= step.threshold && progress <= step.threshold + 20
+      };
+    });
   };
 
   if (currentScreen === "input") {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            <h1 className="text-base font-bold text-gray-900">Chamadas</h1>
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
         <div className="w-full max-w-2xl mx-auto p-3">
           <Card className="bg-white border-0 shadow-md p-6">
             <div className="text-center mb-6">
@@ -522,73 +531,53 @@ export default function CallsSpy() {
     
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            <h1 className="text-base font-bold text-gray-900">Chamadas</h1>
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
         <div className="w-full max-w-2xl mx-auto p-3">
-          <div className="text-center mb-4">
-            <h1 className="text-2xl font-bold text-[#2D3748] mb-1">📞 Investigação de Chamadas</h1>
-          </div>
-
-          <Card className="bg-white border-0 shadow-md p-6 mb-3">
-            <div className="flex flex-col items-center justify-center py-8">
-              <div className="relative mb-6">
-                <div className="absolute inset-0 w-20 h-20 rounded-full bg-orange-200 animate-ping opacity-75"></div>
-                <div className="absolute inset-2 w-16 h-16 rounded-full bg-orange-300 animate-pulse"></div>
-                <div className="relative w-20 h-20 rounded-full bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
-                  <Phone className="w-10 h-10 text-white animate-bounce" />
+          <Card className="bg-white border-0 shadow-md p-4 mb-3">
+            <div className="flex flex-col items-center justify-center py-4">
+              <div className="relative mb-4">
+                <div className="absolute inset-0 w-16 h-16 rounded-full bg-orange-200 animate-ping opacity-75"></div>
+                <div className="absolute inset-2 w-12 h-12 rounded-full bg-orange-300 animate-pulse"></div>
+                <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
+                  <Phone className="w-8 h-8 text-white animate-bounce" />
                 </div>
               </div>
 
-              <h3 className="text-lg font-bold text-gray-900 mb-2">🔍 Analisando Chamadas</h3>
-              <p className="text-sm text-gray-600 text-center mb-1">
-                Número: {phoneNumber}
+              <h3 className="text-base font-bold text-gray-900 mb-1">🔍 Analisando Chamadas</h3>
+              <p className="text-sm text-gray-600 text-center">
+                {phoneNumber}
               </p>
-              <p className="text-xs text-gray-500 mb-4">
+              <p className="text-xs text-gray-500 mb-3">
                 Tempo estimado: 4 minutos
               </p>
 
-              <div className="w-full max-w-xs mb-6">
+              <div className="w-full mb-4">
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div 
                     className="h-2 bg-gradient-to-r from-orange-500 to-orange-600 rounded-full transition-all duration-500"
                     style={{ width: `${loadingProgress}%` }}
                   />
                 </div>
-                <p className="text-xs text-gray-600 text-center mt-1">{loadingProgress}%</p>
+                <p className="text-xs text-gray-600 text-center mt-1 font-semibold">{loadingProgress}%</p>
               </div>
 
-              <div className="space-y-2 w-full">
+              <div className="space-y-1.5 w-full">
                 {steps.map(step => (
                   <div
                     key={step.id}
                     className={`flex items-center gap-2 p-2 rounded-lg ${
                       step.completed ? 'bg-green-50 border-l-2 border-green-500' :
-                      step.active ? 'bg-orange-50 border-l-4 border-orange-500' :
+                      step.active ? 'bg-orange-50 border-l-3 border-orange-500' :
                       'opacity-40'
                     }`}
                   >
                     {step.completed ? (
-                      <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0" />
+                      <CheckCircle2 className="w-3.5 h-3.5 text-green-600 flex-shrink-0" />
                     ) : step.active ? (
-                      <Loader2 className="w-4 h-4 text-orange-600 flex-shrink-0 animate-spin" />
+                      <Loader2 className="w-3.5 h-3.5 text-orange-600 flex-shrink-0 animate-spin" />
                     ) : (
-                      <div className="w-4 h-4 rounded-full border-2 border-gray-300 flex-shrink-0" />
+                      <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 flex-shrink-0" />
                     )}
-                    <p className={`text-xs font-medium ${
+                    <p className={`text-[11px] font-medium leading-tight ${
                       step.completed ? 'text-green-900' :
                       step.active ? 'text-gray-900' :
                       'text-gray-500'
@@ -602,24 +591,14 @@ export default function CallsSpy() {
           </Card>
 
           {showAccelerateButton && loadingProgress < 100 && (
-            <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-3 shadow-sm border border-orange-200">
-              <p className="text-center text-gray-600 text-xs mb-2">A análise está demorando...</p>
               <Button 
                 onClick={handleAccelerate}
-                className="w-full h-10 bg-orange-500 hover:bg-orange-600 text-white font-semibold text-sm rounded-lg"
+              className="w-full h-10 bg-orange-500 hover:bg-orange-600 text-white font-semibold text-sm rounded-xl"
               >
                 <Zap className="w-4 h-4 mr-2" />
-                Acelerar e Concluir Agora - 30 créditos
+              Acelerar Agora - 30 créditos
               </Button>
-            </div>
           )}
-
-          <div className="bg-blue-50 border-l-4 border-blue-500 p-3 rounded mt-3">
-            <p className="text-xs text-blue-900">
-              ⏱️ <span className="font-bold">Aguarde alguns instantes</span><br/>
-              Estamos recuperando o histórico completo de chamadas
-            </p>
-          </div>
         </div>
 
         {showCreditAlert && (

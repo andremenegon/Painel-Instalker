@@ -1,26 +1,62 @@
-import React, { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { base44 } from "@/api/base44Client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Mail, Lock, LogIn } from "lucide-react";
+import { Mail, Lock, LogIn, Eye, EyeOff } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useQueryClient } from "@tanstack/react-query";
 import logoFull from "@/assets/branding/instalker-logo-full.png";
 import { getLastEmail, setLastEmail } from "@/utils/lastEmail";
+import { Toast } from "@/components/Toast";
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
+  
+  // Buscar dados do state (quando vem do registro)
+  const stateEmail = location.state?.email;
+  const statePassword = location.state?.password;
+  const userName = location.state?.userName;
+  const fromRegister = location.state?.fromRegister;
+  const showToastFromRegister = location.state?.showToast;
+  
   const [formData, setFormData] = useState(() => ({
-    email: getLastEmail() || "",
-    password: ""
+    email: stateEmail || getLastEmail() || "",
+    password: statePassword || localStorage.getItem('temp_login_password') || ""
   }));
   const [loading, setLoading] = useState(false);
-
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  
+  // Mostrar toast e limpar senha temporária
+  useEffect(() => {
+    // Mostrar toast se vier do registro
+    if (showToastFromRegister && fromRegister) {
+      const firstName = userName ? userName.split(' ')[0] : 'usuário';
+      setToastMessage(`Bem-vindo de volta, ${firstName}!`);
+      setShowToast(true);
+      
+      // Fechar toast após 4 segundos
+      const timer = setTimeout(() => {
+        setShowToast(false);
+      }, 4000);
+      
+      return () => clearTimeout(timer);
+    }
+    
+    // Limpar senha temporária
+    if (localStorage.getItem('temp_login_password')) {
+      setTimeout(() => {
+        localStorage.removeItem('temp_login_password');
+      }, 1000);
+    }
+  }, [showToastFromRegister, fromRegister]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -33,6 +69,7 @@ export default function Login() {
       // Limpar cache do usuário anterior e forçar refetch
       queryClient.removeQueries({ queryKey: ['currentUser'] });
       queryClient.removeQueries({ queryKey: ['userProfile'] });
+      queryClient.removeQueries({ queryKey: ['layoutUserProfile'] }); // ✅ LIMPAR CACHE DO CABEÇALHO
       queryClient.removeQueries({ queryKey: ['investigations'] });
       
       // Aguardar um pouco para garantir que o logout foi processado
@@ -100,13 +137,21 @@ export default function Login() {
                   <Lock className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
                   <Input
                     id="password"
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     placeholder="Sua senha"
                     value={formData.password}
                     onChange={(e) => setFormData({...formData, password: e.target.value})}
-                    className="pl-9 h-10 text-sm border-orange-200 focus:border-orange-400 focus:ring-orange-400"
+                    className="pl-9 pr-10 h-10 text-sm border-orange-200 focus:border-orange-400 focus:ring-orange-400"
                     required
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 transition-colors"
+                    title={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
 
@@ -147,6 +192,16 @@ export default function Login() {
           </p>
         </div>
       </div>
+
+      {/* Toast de notificação */}
+      {showToast && (
+        <Toast
+          message={toastMessage}
+          type="success"
+          onClose={() => setShowToast(false)}
+        />
+      )}
+
     </div>
   );
 }

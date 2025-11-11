@@ -52,28 +52,33 @@ export default function LocationSpy() {
   const [locationDetails, setLocationDetails] = useState(null);
   const [nearbyCities, setNearbyCities] = useState([]);
   const [nearbyMotels, setNearbyMotels] = useState([]);
+  const [prefetchedLocations, setPrefetchedLocations] = useState(null);
+  const [prefetchedMotels, setPrefetchedMotels] = useState(null);
+  const [prefetchTimestamp, setPrefetchTimestamp] = useState(null);
+  const [prefetchedContextExtras, setPrefetchedContextExtras] = useState(null);
+  const [prefetchedLocationData, setPrefetchedLocationData] = useState(null);
 
   const GOOGLE_STREET_VIEW_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY || import.meta.env.VITE_GOOGLE_STREET_VIEW_KEY || '';
+  const GOOGLE_SEARCH_ENGINE_ID = import.meta.env.VITE_GOOGLE_SEARCH_ENGINE_ID || ''; // Custom Search Engine ID
 
   const getStreetViewImage = (lat, lon, name = '', city = '') => {
     if (!lat || !lon) return null;
-    if (GOOGLE_STREET_VIEW_KEY) {
-      const baseUrl = 'https://maps.googleapis.com/maps/api/streetview';
-      const locationQuery = name
-        ? `${name}${city ? ` ${city}` : ''}`
-        : `${lat},${lon}`;
-      const params = new URLSearchParams({
-        size: '640x360',
-        location: locationQuery,
-        fov: '80',
-        heading: '70',
-        pitch: '0',
-        source: 'outdoor',
-        key: GOOGLE_STREET_VIEW_KEY
-      });
-      return `${baseUrl}?${params.toString()}`;
-    }
-    return 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=800&q=60';
+    if (!GOOGLE_STREET_VIEW_KEY) return null; // ✅ Retornar null se não tiver API key
+    
+    const baseUrl = 'https://maps.googleapis.com/maps/api/streetview';
+    const locationQuery = name
+      ? `${name}${city ? ` ${city}` : ''}`
+      : `${lat},${lon}`;
+    const params = new URLSearchParams({
+      size: '640x360',
+      location: locationQuery,
+      fov: '80',
+      heading: '70',
+      pitch: '0',
+      source: 'outdoor',
+      key: GOOGLE_STREET_VIEW_KEY
+    });
+    return `${baseUrl}?${params.toString()}`;
   };
 
   const getUnlockStorageKey = (id) => `location_unlocks_${id}`;
@@ -178,87 +183,75 @@ export default function LocationSpy() {
     }
   };
 
-  const motelFallbackImagePool = [
-    'https://images.unsplash.com/photo-1496417263034-38ec4f0b665a?auto=format&fit=crop&w=1280&q=60',
-    'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=1280&q=60',
-    'https://images.unsplash.com/photo-1528909514045-2fa4ac7a08ba?auto=format&fit=crop&w=1280&q=60',
-    'https://images.unsplash.com/photo-1505691723518-36a5ac3be353?auto=format&fit=crop&w=1280&q=60',
-    'https://images.unsplash.com/photo-1621330019960-d1574fef6e0f?auto=format&fit=crop&w=1280&q=60',
-  ];
-
-  const getMotelImage = async (motel) => {
-    if (!motel?.name) return null;
-    try {
-      const response = await fetch(
-        `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(motel.name)}%20${encodeURIComponent(motel.city || '')}&inputtype=textquery&fields=photos&key=${GOOGLE_STREET_VIEW_KEY}`
-      );
-      const data = await response.json();
-      const photoRef = data?.candidates?.[0]?.photos?.[0]?.photo_reference;
-      if (photoRef) {
-        return `https://maps.googleapis.com/maps/api/place/photo?maxwidth=1280&photoreference=${photoRef}&key=${GOOGLE_STREET_VIEW_KEY}`;
-      }
-    } catch (error) {
-      console.warn('Falha ao buscar foto real do estabelecimento:', error);
-    }
-    return null;
-  };
-
   const buildFallbackMotels = async (lat, lon, cidade, estado, neighborhood = null) => {
-    const sampleMotels = [
-      {
-        name: 'Motel Miragem Premium',
-        address: neighborhood ? `${neighborhood}, ${cidade}` : `${cidade} - ${estado}`,
-        description: 'Suítes temáticas com hidromassagem e garagem privativa.',
-      },
-      {
-        name: 'Sensations Motel & Spa',
-        address: `Região Metropolitana de ${cidade}`,
-        description: 'Pacotes com pernoite, spa aromático e café da manhã exclusivo.',
-      },
-      {
-        name: 'Lux Garden Motel',
-        address: `Rodovia acesso ${cidade}, KM 08`,
-        description: 'Suítes com teto panorâmico e piscina aquecida individual.',
-      },
-    ];
-
-    const result = [];
-    for (let index = 0; index < sampleMotels.length; index++) {
-      const motel = sampleMotels[index];
-      const jitterLat = lat + (Math.random() - 0.5) * 0.05;
-      const jitterLon = lon + (Math.random() - 0.5) * 0.05;
-      const baseData = {
-        ...motel,
-        distance: formatDistance((index + 1) * 4.8),
-        lat: jitterLat,
-        lon: jitterLon,
-        city: cidade,
-        categoria: 'motel',
-      };
-      let imageUrl = getStreetViewImage(jitterLat, jitterLon, motel.name, cidade);
-      if (!imageUrl && GOOGLE_STREET_VIEW_KEY) {
-        imageUrl = await getMotelImage({ ...baseData, name: motel.name });
-      }
-      baseData.imageUrl = imageUrl || motelFallbackImagePool[index % motelFallbackImagePool.length];
-      result.push(baseData);
+    // ✅ BUSCAR MOTÉIS REAIS VIA GOOGLE PLACES API
+    if (!GOOGLE_MAPS_KEY) {
+      console.log('⚠️ Google Maps API não configurada');
+      return [];
     }
-
-    for (const motel of result) {
-      try {
-        const details = await fetchLocationDetails(motel.lat, motel.lon);
-        if (details?.city) {
-          motel.city = details.city;
-        }
-        if (details?.road) {
-          motel.address = details.road;
-        }
-      } catch (error) {
-        // ignore errors
+    
+    console.log('🔍 Buscando motéis via Google Places API...');
+    
+    try {
+      // Buscar motéis próximos usando Google Places Nearby Search
+      const searchUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lon}&radius=50000&type=motel&keyword=motel&key=${GOOGLE_MAPS_KEY}`;
+      
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(searchUrl)}`;
+      const response = await fetch(proxyUrl);
+      
+      if (!response.ok) {
+        console.error('Erro ao buscar motéis no Google Places:', response.status);
+        return [];
       }
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      
+      const data = await response.json();
+      
+      if (!data.results || data.results.length === 0) {
+        console.log('⚠️ Nenhum motel encontrado via Google Places');
+        return [];
+      }
+      
+      console.log(`✅ ${data.results.length} motéis encontrados no Google Places`);
+      
+      const motels = [];
+      
+      // ✅ Filtrar apenas resultados que têm "motel" no nome e no tipo (case-insensitive)
+      const filteredResults = data.results.filter(place => {
+        const hasMotelInName = place.name && place.name.toLowerCase().includes('motel');
+        const hasMotelType = Array.isArray(place.types) && place.types.some((type) => type.toLowerCase().includes('motel'));
+        return hasMotelInName && hasMotelType;
+      });
+      
+      console.log(`✅ ${filteredResults.length} motéis válidos (com "motel" no nome e no tipo)`);
+      
+      const limited = filteredResults.slice(0, 6);
+      
+      for (const place of limited) {
+        const motelLat = place.geometry?.location?.lat;
+        const motelLon = place.geometry?.location?.lng;
+        
+        if (!motelLat || !motelLon) continue;
+        
+        const distanceKm = calculateDistanceKm(lat, lon, motelLat, motelLon);
+        
+        const motel = {
+          name: place.name,
+          address: place.vicinity || `${cidade} - ${estado}`,
+          distance: formatDistance(distanceKm),
+          lat: motelLat,
+          lon: motelLon,
+          city: cidade,
+          categoria: 'motel',
+        };
+        
+        motels.push(motel);
+      }
+      
+      return motels;
+    } catch (error) {
+      console.error('Erro ao buscar motéis via Google Places:', error);
+      return [];
     }
-
-    return result;
   };
 
   const fetchNearbyMotels = async (lat, lon, cidade, estado, neighborhood = null) => {
@@ -285,22 +278,28 @@ export default function LocationSpy() {
         const motelLat = item.lat || item.center?.lat;
         const motelLon = item.lon || item.center?.lon;
         const amenity = item.tags?.amenity;
-        const originalName = name && name.trim();
-        let placeName = originalName;
-        const baseCity = item.tags?.['addr:city'] || item.tags?.city || item.tags?.town || item.tags?.village || cidade;
-        if (!placeName) {
-          const streetName = item.tags?.['addr:street'] || item.tags?.street;
-          placeName = streetName ? `Motel confidencial ${streetName}` : `Motel confidencial em ${baseCity || 'região'}`;
+        
+        // ✅ IGNORAR motéis sem nome - só aceitar REAIS
+        if (!name || !name.trim()) {
+          console.log('⚠️ Motel sem nome encontrado, ignorando...');
+          return;
         }
+        
+        const placeName = name.trim();
+        const baseCity = item.tags?.['addr:city'] || item.tags?.city || item.tags?.town || item.tags?.village || cidade;
+        
         const baseKey = placeName.toLowerCase();
         let uniqueKey = baseKey;
         let suffix = 2;
         while (namesSeen.has(uniqueKey)) {
           uniqueKey = `${baseKey} #${suffix++}`;
         }
+        
+        let finalName = placeName;
         if (suffix > 2) {
-          placeName = `${placeName} (${suffix - 1})`;
+          finalName = `${placeName} (${suffix - 1})`;
         }
+        
         if (!motelLat || !motelLon) return;
         if (amenity !== 'love_hotel' && amenity !== 'motel') return;
         namesSeen.add(uniqueKey);
@@ -313,7 +312,6 @@ export default function LocationSpy() {
           name: placeName,
           address: baseAddress || cidade,
           distance: formatDistance(distanceKm),
-          description: item.tags?.description || 'Suítes reservadas com garagem privativa e acesso discreto.',
           lat: motelLat,
           lon: motelLon,
           city: rawCity || cidade,
@@ -339,19 +337,7 @@ export default function LocationSpy() {
         }
       }
 
-      const enriched = [];
-      const limited = unique.slice(0, 6);
-      for (let index = 0; index < limited.length; index++) {
-        const motel = limited[index];
-        let imageUrl = getStreetViewImage(motel.lat, motel.lon, motel.name, motel.city);
-        if (!imageUrl && GOOGLE_STREET_VIEW_KEY) {
-          imageUrl = await getMotelImage(motel);
-        }
-        enriched.push({
-          ...motel,
-          imageUrl: imageUrl || motelFallbackImagePool[index % motelFallbackImagePool.length],
-        });
-      }
+      const enriched = unique.slice(0, 6);
 
       return enriched.length > 0 ? enriched : await buildFallbackMotels(lat, lon, cidade, estado, neighborhood);
     } catch (error) {
@@ -365,6 +351,13 @@ export default function LocationSpy() {
       return { details: null, cities: [], motels: [] };
     }
 
+    // ✅ NÃO rodar se investigação já estiver completa
+    if (completedLocationInvestigation && !activeLocationInvestigation) {
+      console.log('⏹️ Investigação completa, pulando hydrate');
+      return { details: locationDetails, cities: nearbyCities, motels: nearbyMotels };
+    }
+
+    console.log('💧 Hydrating context para localização...');
     const details = await fetchLocationDetails(location.lat, location.lon);
     setLocationDetails(details);
 
@@ -449,17 +442,17 @@ export default function LocationSpy() {
     }).catch(console.error);
   }, []);
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity, // ✅ CACHE INFINITO
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false, // ✅ DESATIVADO
-    refetchOnMount: false, // ✅ DESATIVADO
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [], refetch } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -496,8 +489,12 @@ export default function LocationSpy() {
       setLocationDetails(null);
       setNearbyCities([]);
       setNearbyMotels([]);
+      setDataLoaded(false); // ✅ RESET quando não há investigação
       return;
     }
+
+    // ✅ RESET dataLoaded quando trocar de investigação
+    setDataLoaded(false);
 
     try {
       const stored = localStorage.getItem(getUnlockStorageKey(currentId));
@@ -580,40 +577,38 @@ export default function LocationSpy() {
     });
   };
 
-  // CARREGAR DADOS COMPLETADOS - SEM REFETCH
+  // CARREGAR DADOS COMPLETADOS
   useEffect(() => {
-    if (dataLoaded || !completedLocationInvestigation || !user || !userProfile) return; // Ensure userProfile is loaded
+    if (dataLoaded || !completedLocationInvestigation || !user || !userProfile) return;
 
     const loadData = async () => {
-      // userProfile is now derived from useQuery, no need to refetch it here
-      // const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
-      // if (profiles.length === 0) return;
-      // const profile = profiles[0];
-      // setUserProfile(profile); // Removed direct state update
-
-      const history = userProfile.investigation_history || {}; // Use the query-derived userProfile
+      const history = userProfile.investigation_history || {};
       const savedResults = history['Localização'];
       
       if (savedResults && savedResults.detectedLocation) {
+        console.log('📦 Carregando dados salvos da investigação completa');
         setDetectedLocation(savedResults.detectedLocation);
         setMotels(savedResults.motels || []);
         setRealLocations(savedResults.realLocations || []);
         setLocationDetails(savedResults.locationDetails || null);
         setNearbyCities(savedResults.nearbyCities || []);
         setNearbyMotels(savedResults.nearbyMotels || []);
+        
         if ((!savedResults.nearbyCities || savedResults.nearbyCities.length === 0) && savedResults.detectedLocation?.lat && savedResults.detectedLocation?.lon) {
           hydrateLocationContext(savedResults.detectedLocation);
         }
+        
+        setDataLoaded(true);
       } else {
-        // If completed, but no saved data, something is wrong, force a re-detection
-        detectLocation();
+        // ✅ Se não tem dados salvos, buscar agora (MANTER LOADING ATÉ TERMINAR)
+        console.warn('⚠️ Investigação completa mas sem dados salvos. Buscando agora...');
+        setLoadingLocations(true);
+        await detectLocation(); // Vai chamar applyNearbyLocations que salva os dados
       }
-      
-      setDataLoaded(true);
     };
     
     loadData();
-  }, [completedLocationInvestigation?.id, user?.email, userProfile, dataLoaded]); // Added userProfile to dependencies
+  }, [completedLocationInvestigation?.id, user?.email, userProfile, dataLoaded]);
 
   useEffect(() => {
     if (!activeLocationInvestigation) {
@@ -627,14 +622,36 @@ export default function LocationSpy() {
 
       (async () => {
         try {
+          // ✅ BUSCAR DADOS DE LOCALIZAÇÃO PARA SALVAR NO target_username
+          let locationCity = null;
+          let locationState = null;
+          
+          if (prefetchedLocationData && prefetchedLocationData.cidade) {
+            locationCity = prefetchedLocationData.cidade;
+            locationState = prefetchedLocationData.estado;
+          } else if (realLocations && realLocations.length > 0 && realLocations[0].cidade) {
+            locationCity = realLocations[0].cidade;
+            locationState = realLocations[0].estado;
+          }
+          
+          const targetUsername = locationCity && locationState 
+            ? `${locationCity}, ${locationState}` 
+            : "Rastreamento GPS";
+
           await base44.entities.Investigation.update(activeLocationInvestigation.id, {
             progress: 100,
             status: "completed",
+            target_username: targetUsername,
           });
 
           markCompleted({ service: "Localização", id: activeLocationInvestigation.id });
           playSound('complete');
           hasPlayedComplete.current = true;
+          
+          // ✅ NÃO forçar busca aqui - deixar a tela de loading aparecer
+          // O useEffect de prefetch ou de completed investigation vai carregar os dados
+          console.log('✅ Investigação marcada como completa. Aguardando dados...');
+          
           queryClient.invalidateQueries({ queryKey: ['investigations', user?.email] });
           await refetch();
         } catch (error) {
@@ -643,7 +660,42 @@ export default function LocationSpy() {
         }
       })();
     }
-  }, [timerProgress, activeLocationInvestigation?.id, queryClient, refetch, user?.email]);
+  }, [timerProgress, activeLocationInvestigation?.id, queryClient, refetch, user?.email, prefetchedLocationData, realLocations]);
+
+  useEffect(() => {
+    if (
+      timerProgress < 100 ||
+      !prefetchedLocations ||
+      !prefetchedMotels ||
+      dataLoaded
+    ) {
+      return;
+    }
+
+    const applyPrefetched = async () => {
+      setRealLocations(prefetchedLocations);
+      setMotels(prefetchedMotels);
+      setLoadingLocations(false);
+
+      if (prefetchedLocationData) {
+        await saveToUserHistory(
+          prefetchedMotels,
+          prefetchedLocations,
+          prefetchedLocationData,
+          prefetchedContextExtras || {}
+        );
+      }
+
+      setPrefetchedLocations(null);
+      setPrefetchedMotels(null);
+      setPrefetchedContextExtras(null);
+      setPrefetchedLocationData(null);
+      setPrefetchTimestamp(null);
+      setDataLoaded(true);
+    };
+
+    applyPrefetched();
+  }, [timerProgress, prefetchedLocations, prefetchedMotels, prefetchedContextExtras, prefetchedLocationData, dataLoaded]);
 
   const detectLocation = async () => {
     console.log("🌍 DETECTANDO LOCALIZAÇÃO...");
@@ -710,7 +762,7 @@ export default function LocationSpy() {
           console.log(`✅ Localização detectada: ${location.cidade}, ${location.estado}`);
           setDetectedLocation(location);
           const contextExtras = await hydrateLocationContext(location);
-          await fetchNearbyLocations(location.lat, location.lon, location.cidade, location, contextExtras);
+          await applyNearbyLocations(location.lat, location.lon, location.cidade, location, contextExtras);
           return;
         } else {
           console.warn(`${api.name} retornou dados incompletos`);
@@ -730,15 +782,17 @@ export default function LocationSpy() {
     };
     setDetectedLocation(fallback);
     const fallbackExtras = await hydrateLocationContext(fallback);
-    await fetchNearbyLocations(fallback.lat, fallback.lon, fallback.cidade, fallback, fallbackExtras);
+    await applyNearbyLocations(fallback.lat, fallback.lon, fallback.cidade, fallback, fallbackExtras);
   };
 
-  const fetchNearbyLocations = async (lat, lon, cidade, locationData, contextExtras = {}) => {
-    await new Promise(resolve => setTimeout(resolve, 2000));
+  const resolveNearbyLocations = async (lat, lon, cidade, locationData, contextExtras = {}, options = {}) => {
+    if (!options.skipDelay) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
 
     try {
       console.log(`🔍 Tentando buscar lugares reais em ${cidade}...`);
-      
+
       const radius = 20000;
       const queries = [
         `node["amenity"="restaurant"]["name"](around:${radius},${lat},${lon});`,
@@ -757,15 +811,15 @@ export default function LocationSpy() {
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 18000);
-      
+
       const response = await fetch(overpassUrl, { signal: controller.signal });
       clearTimeout(timeoutId);
-      
+
       if (!response.ok) {
         console.warn(`⚠️ Overpass API retornou status ${response.status}, usando fallback`);
         throw new Error(`API Error: ${response.status}`);
       }
-      
+
       const data = await response.json();
       console.log(`📦 Resposta recebida: ${data.elements?.length || 0} elementos`);
 
@@ -828,36 +882,53 @@ export default function LocationSpy() {
           const initialLocations = shuffled.slice(0, 5);
           const extraLocations = shuffled.slice(5, 25); 
           const finalLocations = [...initialLocations, ...extraLocations].slice(0, 24);
-          
+
           console.log(`✅ SUCESSO! Total: ${finalLocations.length} lugares REAIS`);
           console.log(`📊 Iniciais: ${initialLocations.length} | Extras: ${extraLocations.length}`);
-          
-          setMotels(finalLocations);
-          setRealLocations(initialLocations);
-          setLoadingLocations(false);
-          
-          await saveToUserHistory(finalLocations, initialLocations, locationData, contextExtras);
-          return;
+
+          return {
+            initialLocations,
+            finalLocations,
+            contextExtras,
+            locationData,
+          };
         }
       }
     } catch (error) {
       console.warn(`⚠️ Não foi possível buscar lugares reais: ${error.message}`);
     }
-    
+
     console.log("📍 Gerando coordenadas aleatórias e buscando endereços reais");
     const allLocations = await createFallbackLocationsWithAddresses(lat, lon, cidade);
-    
+
     const shuffled = allLocations.sort(() => 0.5 - Math.random());
     const initialLocations = shuffled.slice(0, 5);
     const extraLocations = shuffled.slice(5, 25); 
     const finalLocations = [...initialLocations, ...extraLocations].slice(0, 24);
-    
+
     console.log(`✅ Usando ${finalLocations.length} coordenadas com endereços reais`);
+
+    return {
+      initialLocations,
+      finalLocations,
+      contextExtras,
+      locationData,
+    };
+  };
+
+  const applyNearbyLocations = async (lat, lon, cidade, locationData, contextExtras = {}) => {
+    const resolved = await resolveNearbyLocations(lat, lon, cidade, locationData, contextExtras);
+    if (!resolved) return;
+
+    const { initialLocations, finalLocations } = resolved;
     setRealLocations(initialLocations);
     setMotels(finalLocations);
     setLoadingLocations(false);
-    
+
     await saveToUserHistory(finalLocations, initialLocations, locationData, contextExtras);
+    
+    // ✅ Marcar dados como carregados
+    setDataLoaded(true);
   };
 
   const saveToUserHistory = async (finalLocations, initialLocations, locationData, contextExtras = {}) => {
@@ -973,9 +1044,9 @@ export default function LocationSpy() {
   };
 
   const motelNarratives = [
-    'Estadia recente vinculada ao aparelho monitorado chamou atenção para este endereço.',
-    'Local aparece como destino preferencial em deslocamentos noturnos observados.',
-    'Registro do aparelho indica permanência superior ao padrão em suítes deste motel.',
+    'Estadia vinculada ao aparelho monitorado chamou atenção para este endereço.',
+    'Local aparece como destino preferencial em deslocamentos monitorados.',
+    'Registro do aparelho indica permanência superior ao padrão nas suítes do motel.',
     'Deslocamentos até o motel ocorrem em horários reservados, reforçando o alerta.',
     'O endereço figura entre os principais pontos de sigilo mapeados pelo painel.',
   ];
@@ -994,49 +1065,49 @@ export default function LocationSpy() {
     {
       keywords: ['shopping', 'mall'],
       icon: '🛍️',
-      badge: 'Frequência alta',
+      badge: null,
       tone: 'bg-violet-50 border-violet-200 text-violet-700',
       narrativeKey: 'shopping',
     },
     {
       keywords: ['praça', 'park'],
       icon: '🌳',
-      badge: 'Ponto recorrente',
+      badge: null,
       tone: 'bg-emerald-50 border-emerald-200 text-emerald-700',
       narrativeKey: 'praça',
     },
     {
       keywords: ['restaurant', 'restaurante', 'bar', 'cafe'],
       icon: '🍷',
-      badge: 'Encontro noturno',
+      badge: null,
       tone: 'bg-rose-50 border-rose-200 text-rose-700',
       narrativeKey: 'restaurante',
     },
     {
       keywords: ['hotel'],
       icon: '🏨',
-      badge: 'Visita fora do padrão',
+      badge: null,
       tone: 'bg-slate-50 border-slate-200 text-slate-700',
       narrativeKey: 'hotel',
     },
     {
       keywords: ['clinica', 'hospital'],
       icon: '🩺',
-      badge: 'Agendamento incomum',
+      badge: null,
       tone: 'bg-cyan-50 border-cyan-200 text-cyan-700',
       narrativeKey: 'clinica',
     },
     {
       keywords: ['coworking', 'office'],
       icon: '💼',
-      badge: 'Reunião sigilosa',
+      badge: null,
       tone: 'bg-blue-50 border-blue-200 text-blue-700',
       narrativeKey: 'coworking',
     },
     {
       keywords: ['posto', 'fuel'],
       icon: '⛽️',
-      badge: 'Parada rápida',
+      badge: null,
       tone: 'bg-amber-50 border-amber-200 text-amber-700',
       narrativeKey: 'posto',
     },
@@ -1044,7 +1115,7 @@ export default function LocationSpy() {
 
   const defaultHotspotMeta = {
     icon: '📍',
-    badge: 'Monitoramento ativo',
+    badge: null,
     tone: 'bg-gray-50 border-gray-200 text-gray-700',
     narrativeKey: 'default',
   };
@@ -1066,8 +1137,8 @@ export default function LocationSpy() {
     if (location?.categoria === 'motel' || location?.tipo === 'motel') {
       return {
         icon: '💋',
-        badge: (loc) => `Motel em ${loc?.city || loc?.cidade || detectedLocation?.cidade || 'cidade próxima'}`,
-        tone: 'bg-rose-50 border-rose-200 text-rose-700',
+        badge: '🚨 Local suspeito',
+        tone: 'bg-rose-500 border-rose-600 text-white',
         narrativeKey: 'motel',
       };
     }
@@ -1191,45 +1262,27 @@ export default function LocationSpy() {
       await new Promise((resolve) => setTimeout(resolve, 600));
     }
 
-    if (collected.length < desiredCount) {
-      console.warn('Fallback ainda insuficiente, completando com coordenadas aleatórias.');
-      const remaining = desiredCount - collected.length;
-      for (let i = 0; i < remaining; i++) {
-        const randomLat = lat + (Math.random() - 0.5) * 0.05;
-        const randomLon = lon + (Math.random() - 0.5) * 0.05;
-        const category = fallbackCategories[(collected.length + i) % fallbackCategories.length];
-
-        const geocode = await getAddressFromCoords(randomLat, randomLon);
-        collected.push({
-          lat: randomLat,
-          lon: randomLon,
-          tipo: category.tipo,
-          categoria: category.tipo,
-          suspicious: false,
-          needsGeocode: false,
-          nome: geocode?.name || category.label,
-          cidade: geocode?.city || cidade,
-          endereco: geocode?.address || null,
-        });
-
-        await new Promise((resolve) => setTimeout(resolve, 400));
-      }
-    }
-
-    return collected.slice(0, desiredCount);
+    // ✅ NÃO gerar locais falsos! Retornar apenas os REAIS encontrados
+    console.log(`✅ ${collected.length} locais reais encontrados (de ${desiredCount} desejados)`);
+    return collected;
   };
 
   const getDirectionsUrl = (location) => {
     if (!location) return '#';
+    
+    // ✅ SEMPRE usar nome (não coordenadas)
     const name = location.nome || location.name || location.title;
     const city = location.city || location.cidade || locationDetails?.city || detectedLocation?.cidade;
     if (name) {
       const query = encodeURIComponent(`${name}${city ? ` ${city}` : ''}`);
       return `https://www.google.com/maps/search/?api=1&query=${query}`;
     }
+    
+    // Fallback: usar coordenadas se não tiver nome
     if (location.lat && location.lon) {
       return `https://www.google.com/maps/dir/?api=1&destination=${location.lat},${location.lon}`;
     }
+    
     return '#';
   };
 
@@ -1344,6 +1397,9 @@ export default function LocationSpy() {
     setLoading(false);
     
     await refetch(); // Refetch investigations to show the new one
+    
+    // ✅ INICIAR BUSCA DE LOCALIZAÇÃO IMEDIATAMENTE (SEM DELAY)
+    detectLocation(); // Sem timeout para garantir que detecta antes da aceleração
   };
 
   const handleCancelInvestigation = async () => {
@@ -1358,10 +1414,30 @@ export default function LocationSpy() {
       type: "danger",
       onConfirm: async () => {
         playSound('trash'); // ✅ SOM AO CONFIRMAR
+        
+        // 🔥 LIMPAR HISTÓRICO DO BANCO DE DADOS
+        if (userProfile) {
+          const updatedHistory = { ...(userProfile.investigation_history || {}) };
+          delete updatedHistory['Localização'];
+          await base44.entities.UserProfile.update(userProfile.id, {
+            investigation_history: updatedHistory
+          });
+          updateUserProfileCache({ investigation_history: updatedHistory });
+          updateLayoutProfileCache({ investigation_history: updatedHistory });
+        }
+        
+        // 🔥 DELETAR INVESTIGAÇÃO
         await base44.entities.Investigation.delete(activeLocationInvestigation.id);
         resetTimer({ service: "Localização", id: activeLocationInvestigation.id });
+        
+        // 🔥 LIMPAR LOCALSTORAGE
         localStorage.removeItem(`location_unlocks_${activeLocationInvestigation.id}`);
+        localStorage.removeItem(getUnlockStorageKey(activeLocationInvestigation.id));
+        
+        // 🔥 LIMPAR CACHE DO REACT QUERY
         await queryClient.invalidateQueries(['investigations', user?.email]);
+        await queryClient.invalidateQueries(['userProfile', user?.email]);
+        
         setShowConfirmModal(false);
         hasPlayedComplete.current = false;
         navigate(createPageUrl("Dashboard"));
@@ -1375,10 +1451,29 @@ export default function LocationSpy() {
 
     try {
       playSound('trash');
+      
+      // 🔥 LIMPAR HISTÓRICO DO BANCO DE DADOS
+      if (userProfile) {
+        const updatedHistory = { ...(userProfile.investigation_history || {}) };
+        delete updatedHistory['Localização'];
+        await base44.entities.UserProfile.update(userProfile.id, {
+          investigation_history: updatedHistory
+        });
+        updateUserProfileCache({ investigation_history: updatedHistory });
+        updateLayoutProfileCache({ investigation_history: updatedHistory });
+      }
+      
+      // 🔥 DELETAR INVESTIGAÇÃO
       await base44.entities.Investigation.delete(investigationId);
       resetTimer({ service: "Localização", id: investigationId });
+      
+      // 🔥 LIMPAR LOCALSTORAGE
       localStorage.removeItem(`location_unlocks_${investigationId}`);
+      localStorage.removeItem(getUnlockStorageKey(investigationId));
+      
+      // 🔥 LIMPAR CACHE DO REACT QUERY
       await queryClient.invalidateQueries(['investigations', user?.email]);
+      await queryClient.invalidateQueries(['userProfile', user?.email]);
 
       if (pendingDeleteIdRef.current === investigationId) {
         pendingDeleteIdRef.current = null;
@@ -1450,15 +1545,37 @@ export default function LocationSpy() {
     const boost = Math.floor(Math.random() * 11) + 20; // 20% - 30%
     const newProgress = accelerateTimer(boost);
 
-    await base44.entities.Investigation.update(activeLocationInvestigation.id, {
+    // ✅ SE COMPLETAR, SALVAR A CIDADE NO target_username
+    let updateData = {
       progress: newProgress,
       status: newProgress >= 100 ? "completed" : "processing"
-    });
+    };
+    
+    if (newProgress >= 100) {
+      let locationCity = null;
+      let locationState = null;
+      
+      if (prefetchedLocationData && prefetchedLocationData.cidade) {
+        locationCity = prefetchedLocationData.cidade;
+        locationState = prefetchedLocationData.estado;
+      } else if (realLocations && realLocations.length > 0 && realLocations[0].cidade) {
+        locationCity = realLocations[0].cidade;
+        locationState = realLocations[0].estado;
+      }
+      
+      if (locationCity && locationState) {
+        updateData.target_username = `${locationCity}, ${locationState}`;
+      }
+    }
+
+    await base44.entities.Investigation.update(activeLocationInvestigation.id, updateData);
  
     queryClient.setQueryData(['investigations', user?.email], (oldData) => {
       if (!oldData) return oldData;
       return oldData.map(inv => 
-        inv.id === activeLocationInvestigation.id ? { ...inv, progress: newProgress, status: newProgress >= 100 ? "completed" : "processing" } : inv
+        inv.id === activeLocationInvestigation.id 
+          ? { ...inv, ...updateData } 
+          : inv
       );
     });
  
@@ -1484,7 +1601,7 @@ export default function LocationSpy() {
       credits: updatedCredits,
       xp: updatedXp
     });
-    // Update cache directly
+    
     updateUserProfileCache({ credits: updatedCredits, xp: updatedXp });
     updateLayoutProfileCache({ credits: updatedCredits, xp: updatedXp });
     
@@ -1496,6 +1613,8 @@ export default function LocationSpy() {
     setShowMoreLocations(true);
     const currentId = activeLocationInvestigation?.id || completedLocationInvestigation?.id;
     persistUnlockState(currentId, { showMoreLocations: true });
+    
+    playSound('success');
   };
 
   const handleBuyRealTime = async () => {
@@ -1594,6 +1713,88 @@ export default function LocationSpy() {
     if (progress >= 30) return "10 minutos";
     return "20 minutos";
   };
+
+  useEffect(() => {
+    // ✅ NÃO rodar se investigação estiver completa
+    if (completedLocationInvestigation) {
+      console.log('⏹️ Investigação completa, prefetch cancelado');
+      return;
+    }
+
+    const shouldPrefetch =
+      activeLocationInvestigation &&
+      activeLocationInvestigation.status === 'processing' && // ✅ Apenas se ATIVA
+      timerProgress < 100 &&
+      timerProgress > 10 && // ✅ Iniciar prefetch após 10% de progresso
+      !prefetchedLocations &&
+      detectedLocation;
+
+    if (!shouldPrefetch) return;
+
+    console.log(`🚀 PREFETCH INICIADO em ${timerProgress}%`);
+
+    const runPrefetch = async () => {
+      try {
+        const contextExtras = await hydrateLocationContext(detectedLocation);
+        const resolved = await resolveNearbyLocations(
+          detectedLocation.lat,
+          detectedLocation.lon,
+          detectedLocation.cidade,
+          detectedLocation,
+          contextExtras,
+          { skipDelay: true }
+        );
+
+        if (resolved) {
+          setPrefetchedLocations(resolved.initialLocations);
+          setPrefetchedMotels(resolved.finalLocations);
+          setPrefetchedContextExtras(resolved.contextExtras || {});
+          setPrefetchedLocationData(resolved.locationData || detectedLocation);
+          setPrefetchTimestamp(Date.now());
+          console.log(`✅ PREFETCH CONCLUÍDO: ${resolved.finalLocations.length} locais`);
+        }
+      } catch (error) {
+        console.warn('Prefetch falhou:', error);
+      }
+    };
+
+    runPrefetch();
+  }, [activeLocationInvestigation, completedLocationInvestigation, timerProgress, detectedLocation, prefetchedLocations]);
+
+  useEffect(() => {
+    if (
+      timerProgress < 100 ||
+      !prefetchedLocations ||
+      !prefetchedMotels ||
+      dataLoaded
+    ) {
+      return;
+    }
+
+    const applyPrefetched = async () => {
+      setRealLocations(prefetchedLocations);
+      setMotels(prefetchedMotels);
+      setLoadingLocations(false);
+
+      if (prefetchedLocationData) {
+        await saveToUserHistory(
+          prefetchedMotels,
+          prefetchedLocations,
+          prefetchedLocationData,
+          prefetchedContextExtras || {}
+        );
+      }
+
+      setPrefetchedLocations(null);
+      setPrefetchedMotels(null);
+      setPrefetchedContextExtras(null);
+      setPrefetchedLocationData(null);
+      setPrefetchTimestamp(null);
+      setDataLoaded(true);
+    };
+
+    applyPrefetched();
+  }, [timerProgress, prefetchedLocations, prefetchedMotels, prefetchedContextExtras, prefetchedLocationData, dataLoaded]);
 
   if (!user || userProfile === undefined) { // Check for undefined to ensure userProfile query has run
     return (
@@ -1729,6 +1930,7 @@ export default function LocationSpy() {
     const coordinates = [detectedLocation.lat, detectedLocation.lon];
     const additionalHotspots = motels.slice(realLocations.length);
     const potentialLocationsToReveal = additionalHotspots;
+    // ✅ Sistema de "revelar mais" - lista escondida mas mapa e contador mostram tudo
     const displayedHotspots = showMoreLocations ? [...realLocations, ...additionalHotspots] : realLocations;
     const displayedMotels = showMoreLocations ? nearbyMotels : nearbyMotels.slice(0, 2);
     const additionalMotelsLocked = Math.max(0, nearbyMotels.length - displayedMotels.length);
@@ -1736,13 +1938,11 @@ export default function LocationSpy() {
     const isRealTimeComplete = realTimeTracking && realTimeProgress >= 100;
 
     const cityInsightMap = new Map();
-    const registerCity = (cityName, category, loc) => {
+    const registerCity = (cityName, loc) => {
       if (!cityName) return;
       const normalized = cityName.toLowerCase();
-      const entry = cityInsightMap.get(normalized) || { name: cityName, motels: 0, hotspots: 0, total: 0, distanceKm: null };
+      const entry = cityInsightMap.get(normalized) || { name: cityName, total: 0, distanceKm: null };
       entry.total += 1;
-      if (category === 'motel') entry.motels += 1;
-      if (category === 'hotspot') entry.hotspots += 1;
       if (loc && loc.lat && loc.lon && detectedLocation) {
         const distance = calculateDistanceKm(detectedLocation.lat, detectedLocation.lon, loc.lat, loc.lon);
         if (!entry.distanceKm || distance < entry.distanceKm) {
@@ -1752,39 +1952,68 @@ export default function LocationSpy() {
       cityInsightMap.set(normalized, entry);
     };
 
+    // ✅ Registrar TODOS os locais (motéis + hotspots) como "locais suspeitos"
     [...realLocations, ...additionalHotspots].forEach((loc) =>
-      registerCity(loc.cidade || loc.city || detectedLocation.cidade, 'hotspot', loc)
+      registerCity(loc.cidade || loc.city || detectedLocation.cidade, loc)
     );
     nearbyMotels.forEach((motel) =>
-      registerCity(motel.city || detectedLocation.cidade, 'motel', motel)
+      registerCity(motel.city || detectedLocation.cidade, motel)
     );
 
-    let cityInsights = Array.from(cityInsightMap.values())
+    const cityInsights = Array.from(cityInsightMap.values())
       .sort((a, b) => b.total - a.total)
       .slice(0, 5)
-      .map((entry) => {
-        const summaryParts = [];
-        if (entry.motels > 0) summaryParts.push(`${entry.motels} ${entry.motels === 1 ? 'local suspeito' : 'locais suspeitos'}`);
-        if (entry.hotspots > 0) summaryParts.push(`${entry.hotspots} ${entry.hotspots === 1 ? 'deslocamento suspeito' : 'deslocamentos suspeitos'}`);
-        return {
-          name: entry.name,
-          summary: summaryParts.join(' • '),
-        };
-      });
+      .map((entry) => ({
+        name: entry.name,
+        summary: `${entry.total} ${entry.total === 1 ? 'local suspeito' : 'locais suspeitos'}`,
+      }));
 
+    // ✅ Aumentar o número de locais em cidades vizinhas (de 1-10 para 5-20)
     if (cityInsights.length < 5 && nearbyCities?.length) {
       const seenCities = new Set(cityInsights.map((city) => city.name.toLowerCase()));
       for (const city of nearbyCities) {
         if (seenCities.has(city.name.toLowerCase())) continue;
-        const randomCount = seededRandomInt(1, 10, city.name);
+        const randomCount = seededRandomInt(5, 20, city.name);
         cityInsights.push({
           name: city.name,
-          summary: `${randomCount} ${randomCount === 1 ? 'local suspeito monitorado' : 'locais suspeitos monitorados'}`,
+          summary: `${randomCount} ${randomCount === 1 ? 'local suspeito' : 'locais suspeitos'}`,
         });
         seenCities.add(city.name.toLowerCase());
         if (cityInsights.length >= 5) break;
       }
     }
+
+    // ✅ FILTRAR motéis sem nome - mostrar apenas REAIS
+    const normalizedMotels = displayedMotels
+      .filter((motel) => {
+        const name = motel.nome || motel.name || '';
+        return name && name.trim().length > 0;
+      })
+      .map((motel) => ({
+        ...motel,
+        nome: motel.nome || motel.name,
+      }));
+
+    // ✅ Embaralhar locais de forma mais variada (intercalando motéis e hotspots)
+    const combinedLocations = [];
+    const hotspotsCopy = [...displayedHotspots];
+    const motelsCopy = [...normalizedMotels];
+    
+    // Intercalar: 2-3 hotspots, 1 motel, 2-3 hotspots, 1 motel...
+    while (hotspotsCopy.length > 0 || motelsCopy.length > 0) {
+      // Adicionar 2-3 hotspots
+      const hotspotsToAdd = seededRandomInt(2, 3, `hotspot-${combinedLocations.length}`);
+      for (let i = 0; i < hotspotsToAdd && hotspotsCopy.length > 0; i++) {
+        combinedLocations.push(hotspotsCopy.shift());
+      }
+      
+      // Adicionar 1 motel
+      if (motelsCopy.length > 0) {
+        combinedLocations.push(motelsCopy.shift());
+      }
+    }
+
+    const totalVisibleLocations = combinedLocations.length;
 
     if (loadingLocations) {
       return (
@@ -1857,22 +2086,6 @@ export default function LocationSpy() {
     return (
       <>
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-        <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-          <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-            <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-1" />
-              Voltar
-            </Button>
-            <h1 className="text-base font-bold text-gray-900">Localização</h1>
-            {userProfile && (
-              <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-                <Zap className="w-3 h-3 text-orange-500" />
-                <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-              </div>
-            )}
-          </div>
-        </div>
-
         <div className="w-full max-w-2xl mx-auto p-4">
           <div className="text-center mb-2">
           </div>
@@ -1903,7 +2116,8 @@ export default function LocationSpy() {
               >
                 <MapUpdater center={coordinates} />
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy;' />
-                {(showMoreLocations ? motels : realLocations).map((loc, idx) => (
+                {/* ✅ Mapa SEMPRE mostra TODOS os pinos (mesmo antes de pagar) */}
+                {[...realLocations, ...additionalHotspots, ...nearbyMotels].map((loc, idx) => (
                   <CircleMarker key={idx} center={[loc.lat, loc.lon]} radius={8} fillColor="#FF9800" fillOpacity={0.8} color="white" weight={2} />
                 ))}
               </MapContainer>
@@ -1913,8 +2127,8 @@ export default function LocationSpy() {
                   <div className="flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 text-[#FF6B55] flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-sm font-bold text-gray-900"> Localizações suspeitas encontradas</p>
-                      <p className="text-[12px] text-gray-600 mt-0.5">Veja alguns locais no mapa abaixo:</p>
+                      <p className="text-sm font-bold text-gray-900">{realLocations.length + additionalHotspots.length + nearbyMotels.length} Localizações suspeitas encontradas</p>
+                      <p className="text-[12px] text-gray-600 mt-0.5">Veja todos os locais no mapa abaixo:</p>
                     </div>
                   </div>
                 </div>
@@ -2004,68 +2218,75 @@ export default function LocationSpy() {
 
           {realLocations.length > 0 && (
             <Card className="bg-white border-0 shadow-md p-4 mb-3">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h3 className="text-[17px] font-bold text-gray-900">📍 Localizações Encontradas</h3>
-                  <p className="text-[13px] text-gray-500">Locais suspeitos onde o alvo possa ter passado.</p>
-                </div>
-    
+              <div className="mb-3">
+                <h3 className="text-[17px] font-bold text-gray-900">📍 Localizações Encontradas</h3>
+                <p className="text-[13px] text-gray-500">Locais suspeitos onde o alvo possa ter passado.</p>
               </div>
 
               <div className="space-y-3">
-                {[...displayedHotspots, ...displayedMotels].map((loc, index) => {
+                {combinedLocations.map((loc, index) => {
                   const { meta, narrative, timeframe } = buildNarrativeForLocation(loc);
                   const badgeLabel = typeof meta.badge === 'function' ? meta.badge(loc) : meta.badge;
                   const cityLabel = loc.cidade || loc.city || detectedLocation.cidade;
+                  const isMotel = loc.categoria === 'motel';
                   return (
-                    <div key={`location-${index}`} className="rounded-xl border border-gray-200 p-3 shadow-sm hover:border-orange-200 transition">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xl">{meta.icon}</span>
-                            <p className="text-[15px] font-semibold text-gray-900">{loc.nome}</p>
+                    <div
+                      key={`location-${index}`}
+                      className={`rounded-xl border shadow-sm transition overflow-hidden ${
+                        isMotel
+                          ? 'border-rose-300 bg-rose-100/80 hover:border-rose-400'
+                          : 'border-gray-200 bg-white hover:border-orange-200'
+                      }`}
+                    >
+                      <div className="p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xl">{meta.icon}</span>
+                              <p className="text-[15px] font-semibold text-gray-900">{loc.nome}</p>
+                            </div>
+                            {(loc.endereco || loc.address) && (
+                              <p className="text-[13px] text-gray-500">{loc.endereco || loc.address}</p>
+                            )}
+                            {cityLabel && (
+                              <p className="text-[13px] text-gray-500 mt-1">
+                                <span className="font-semibold text-gray-700">{cityLabel}</span>
+                              </p>
+                            )}
+                            {/* Descrições removidas */}
                           </div>
-                          {loc.endereco && (
-                            <p className="text-[13px] text-gray-500">{loc.endereco}</p>
-                          )}
-                          {cityLabel && (
-                            <p className="text-[13px] text-gray-500 mt-1">
-                              <span className="font-semibold text-gray-700">{cityLabel}</span>
-                            </p>
-                          )}
-                          {loc.categoria === 'motel' && loc.description && (
-                            <p className="text-[13px] text-gray-500 mt-2">{loc.description}</p>
+                          {badgeLabel && (
+                            <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[13px] font-semibold ${meta.tone}`}>
+                              {badgeLabel}
+                            </div>
                           )}
                         </div>
-                        <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-[13px] font-semibold ${meta.tone}`}>
-                          {meta.icon} {badgeLabel}
-                        </div>
+                        <p className="text-[13px] text-gray-600 mt-2">{narrative}</p>
+                        <p className="text-[12px] text-gray-400 mt-1">{timeframe}</p>
+                        <a
+                          href={getDirectionsUrl(loc)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 mt-3 text-xs font-medium text-gray-400 hover:text-gray-500"
+                        >
+                          <span className="text-sm">↗</span>
+                          Ver localização
+                        </a>
                       </div>
-                      <p className="text-[13px] text-gray-600 mt-2">{narrative}</p>
-                      <p className="text-[12px] text-gray-400 mt-1">{timeframe}</p>
-                      <a
-                        href={getDirectionsUrl(loc.categoria === 'motel' ? { ...loc, nome: loc.nome || loc.name } : loc)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 mt-3 text-xs font-medium text-gray-400 hover:text-gray-500"
-                      >
-                        <span className="text-sm">↗</span>
-                        Ver localização
-                      </a>
                     </div>
                   );
                 })}
               </div>
 
               {!showMoreLocations && totalHiddenSpots > 0 && (
-                <Button onClick={handleBuyMoreLocations} variant="outline" className="w-full h-auto border-2 border-orange-300 hover:bg-orange-50 font-semibold text-sm rounded-xl p-4 mt-4">
+                <Button onClick={handleBuyMoreLocations} variant="outline" className="w-full h-auto border border-gray-200 hover:bg-gray-50 font-medium text-sm rounded-xl p-4 mt-4">
                   <div className="text-center w-full">
-                    <div className="flex items-center justify-center gap-2 mb-2">
-                      <span className="text-[15px]"></span>
-                      <p className="text-sm font-bold text-gray-900">+ {totalHiddenSpots} locais suspeitos encontrados... </p>
+                    <div className="flex items-center justify-center gap-2 mb-1">
+                      <span className="text-base">🔓</span>
+                      <p className="text-sm font-semibold text-gray-900">Revelar {totalHiddenSpots} locais ocultos</p>
                     </div>
-                    <div className="flex items-center justify-center gap-2 text-orange-600">
-                      <span className="text-base font-bold">Desbloquear por 40 créditos</span>
+                    <div className="flex items-center justify-center gap-1 text-gray-600 text-xs">
+                      <span>40 créditos</span>
                     </div>
                   </div>
                 </Button>
@@ -2146,22 +2367,6 @@ export default function LocationSpy() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-3xl mx-auto px-3 py-3 flex items-center justify-between">
-          <Button variant="ghost" onClick={() => navigate(createPageUrl("Dashboard"))} className="h-9 px-3 hover:bg-gray-100" size="sm">
-            <ArrowLeft className="w-4 h-4 mr-1" />
-            Voltar
-          </Button>
-          <h1 className="text-base font-bold text-gray-900">Localização</h1>
-          {userProfile && (
-            <div className="flex items-center gap-1 bg-orange-50 rounded-full px-3 py-1 border border-orange-200">
-              <Zap className="w-3 h-3 text-orange-500" />
-              <span className="text-sm font-bold text-gray-900">{userProfile.credits}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
       <div className="w-full max-w-2xl mx-auto p-3">
         <Card className="relative overflow-hidden border-0 shadow-xl bg-gradient-to-br from-[#FFE7D7] via-white to-[#FFDCCA] p-6 rounded-3xl">
           <div className="absolute -right-20 -top-24 w-52 h-52 bg-[#FFB59E]/40 rounded-full blur-3xl"></div>

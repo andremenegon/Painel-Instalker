@@ -41,6 +41,9 @@ export default function FacebookSpyResults() {
   const [accelerateCount, setAccelerateCount] = useState(0);
   const [acceleratingPassword, setAcceleratingPassword] = useState(false);
   const [messengerStatus, setMessengerStatus] = useState('locked');
+  const [showCreditAlert, setShowCreditAlert] = useState(false);
+  const [creditsSpent, setCreditsSpent] = useState(0);
+  const [xpGained, setXpGained] = useState(0);
   const progressIntervalRef = useRef(null);
   const initialBoostTimeoutRef = useRef(null);
 
@@ -88,17 +91,17 @@ export default function FacebookSpyResults() {
     refetchOnMount: false,
   });
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity,
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [] } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -220,10 +223,10 @@ export default function FacebookSpyResults() {
   }, [completedFacebookInvestigation, scheduleInitialBoost]);
 
   const handleUnlockPassword = async () => {
-    if (!userProfile || userProfile.credits < 60) {
+    if (!userProfile || userProfile.credits < 50) {
       setAlertConfig({
         title: "Créditos insuficientes",
-        message: "Você precisa de 60 créditos para iniciar o desbloqueio da senha.",
+        message: "Você precisa de 50 créditos para iniciar o bypass de segurança.",
         confirmText: "Comprar Créditos",
         onConfirm: () => {
           setShowAlertModal(false);
@@ -237,10 +240,29 @@ export default function FacebookSpyResults() {
     if (!completedFacebookInvestigation) return;
 
     await base44.entities.UserProfile.update(userProfile.id, {
-      credits: userProfile.credits - 60,
-      xp: (userProfile.xp || 0) + 35
+      credits: userProfile.credits - 50,
+      xp: (userProfile.xp || 0) + 30
+    });
+    queryClient.setQueryData(['userProfile', user?.email], (oldData) => {
+      if (!oldData) return oldData;
+      return oldData.map((profile) =>
+        profile.id === userProfile.id
+          ? { ...profile, credits: userProfile.credits - 50, xp: (userProfile.xp || 0) + 30 }
+          : profile
+      );
+    });
+    queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
+      if (!oldProfile) return oldProfile;
+      return { ...oldProfile, credits: userProfile.credits - 50, xp: (userProfile.xp || 0) + 30 };
     });
     queryClient.invalidateQueries(['userProfile', user?.email]);
+    queryClient.invalidateQueries(['layoutUserProfile', user?.email]);
+    
+    // ✅ MOSTRAR POP-UP DE CRÉDITOS
+    setCreditsSpent(50);
+    setXpGained(30);
+    setShowCreditAlert(true);
+    setTimeout(() => setShowCreditAlert(false), 3000);
 
     const startTime = Date.now();
     const unlockStartKey = `facebook_password_start_${completedFacebookInvestigation.id}`;
@@ -326,7 +348,26 @@ export default function FacebookSpyResults() {
         credits: userProfile.credits - 30,
         xp: (userProfile.xp || 0) + 20
       });
+      queryClient.setQueryData(['userProfile', user?.email], (oldData) => {
+        if (!oldData) return oldData;
+        return oldData.map((profile) =>
+          profile.id === userProfile.id
+            ? { ...profile, credits: userProfile.credits - 30, xp: (userProfile.xp || 0) + 20 }
+            : profile
+        );
+      });
+      queryClient.setQueryData(['layoutUserProfile', user?.email], (oldProfile) => {
+        if (!oldProfile) return oldProfile;
+        return { ...oldProfile, credits: userProfile.credits - 30, xp: (userProfile.xp || 0) + 20 };
+      });
       queryClient.invalidateQueries(['userProfile', user?.email]);
+      queryClient.invalidateQueries(['layoutUserProfile', user?.email]);
+      
+      // ✅ MOSTRAR POP-UP DE CRÉDITOS
+      setCreditsSpent(30);
+      setXpGained(20);
+      setShowCreditAlert(true);
+      setTimeout(() => setShowCreditAlert(false), 3000);
 
       const unlockProgressKey = `facebook_password_progress_${completedFacebookInvestigation.id}`;
       const unlockStatusKey = `facebook_password_status_${completedFacebookInvestigation.id}`;
@@ -548,36 +589,123 @@ export default function FacebookSpyResults() {
           <Card className="bg-white border-0 shadow-lg p-5">
             <div className="flex items-center gap-2 mb-3">
               <Shield className="w-5 h-5 text-[#1877F2]" />
-              <h3 className="font-bold text-gray-900 text-sm">🔐 Desbloquear Senha</h3>
+              <h3 className="font-bold text-gray-900 text-sm">⚡ Bypass de Segurança Facebook</h3>
             </div>
 
             {passwordStatus === 'idle' ? (
               <>
-                <p className="text-xs text-gray-600 mb-3">A senha está blindada por criptografia de nível corporativo. Inicie a descriptografia para liberar mensagens privadas, registros sigilosos e configurações ocultas do perfil.</p>
+                <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-4 mb-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Lock className="w-4 h-4 text-green-700" />
+                    <p className="text-sm font-bold text-green-900">SENHA DESCOBERTA ✓</p>
+                  </div>
+                  <p className="text-xs text-green-700 font-mono">senha: ••••••••••</p>
+                </div>
+
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertTriangle className="w-4 h-4 text-orange-700" />
+                    <p className="text-sm font-bold text-orange-900">OBSTÁCULOS DETECTADOS</p>
+                  </div>
+                  <p className="text-xs text-orange-800 mb-3">Para acessar o perfil com a senha descoberta, é necessário contornar as proteções de segurança ativadas pelo Facebook.</p>
+                  
+                  <div className="space-y-2 text-xs text-orange-900">
+                    <div className="flex items-start gap-2">
+                      <Shield className="w-3 h-3 mt-0.5 flex-shrink-0 text-orange-600" />
+                      <p><span className="font-semibold">Firewall:</span> dispositivos não autorizados</p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <MessageCircle className="w-3 h-3 mt-0.5 flex-shrink-0 text-orange-600" />
+                      <p><span className="font-semibold">Verificação SMS:</span> código de 6 dígitos</p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <Lock className="w-3 h-3 mt-0.5 flex-shrink-0 text-orange-600" />
+                      <p><span className="font-semibold">Token de sessão:</span> criptografado</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3 text-xs text-blue-800">
+                  <p className="flex items-center gap-1 mb-1">
+                    <span className="font-semibold">⏱️ Processo de bypass:</span> 24-36 horas
+                  </p>
+                  <p className="flex items-center gap-1">
+                    <span className="font-semibold">🔓 Após desbloqueio:</span> acesso completo garantido
+                  </p>
+                </div>
+
                 <Button
                   onClick={handleUnlockPassword}
-                  className="w-full h-11 bg-[#1877F2] hover:bg-[#1653C0] text-white font-semibold text-sm rounded-xl"
+                  className="w-full h-11 bg-gradient-to-r from-[#1877F2] to-[#1653C0] hover:from-[#1653C0] hover:to-[#1242A0] text-white font-semibold text-sm rounded-xl shadow-lg"
                 >
-                  <Lock className="w-4 h-4 mr-2" />
-                  Iniciar desbloqueio - 60 créditos
+                  <Zap className="w-4 h-4 mr-2" />
+                  Iniciar bypass - 50 créditos
                 </Button>
               </>
             ) : passwordStatus === 'processing' ? (
               <div className="space-y-3">
-                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
-                    <p className="text-sm font-semibold text-blue-900">Desbloqueio em andamento</p>
+                <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-3 mb-3">
+                  <div className="flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-green-700" />
+                    <p className="text-sm font-bold text-green-900">SENHA CAPTURADA ✓</p>
                   </div>
-                  <p className="text-xs text-blue-700">Quebrando criptografia AES-256 através de força bruta distribuída.</p>
-                  <div className="mt-3">
-                    <div className="w-full bg-blue-200 rounded-full h-2">
-                      <div className="h-2 bg-gradient-to-r from-[#1877F2] to-[#0F4BC6] rounded-full" style={{ width: `${passwordProgress}%` }}></div>
+                  <p className="text-xs text-green-700 font-mono mt-1">senha: ••••••••••</p>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                    <p className="text-sm font-semibold text-blue-900">BYPASS EM ANDAMENTO</p>
+                  </div>
+
+                  {/* Firewall */}
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <Shield className="w-3.5 h-3.5 text-blue-700" />
+                        <p className="text-xs font-semibold text-blue-900">Firewall do Facebook</p>
+                      </div>
+                      <span className="text-[10px] font-bold text-blue-700">{Math.min(85, Math.floor(passwordProgress * 0.85))}%</span>
                     </div>
-                    <div className="flex items-center justify-between text-[11px] text-blue-800 mt-1">
-                      <span>{passwordProgress}%</span>
-                      <span>Restante: ~{remainingHours}h</span>
+                    <div className="w-full bg-blue-200 rounded-full h-1.5">
+                      <div className="h-1.5 bg-gradient-to-r from-blue-500 to-blue-600 rounded-full transition-all duration-500" style={{ width: `${Math.min(85, Math.floor(passwordProgress * 0.85))}%` }}></div>
                     </div>
+                    <p className="text-[10px] text-blue-600 mt-0.5">{Math.min(85, Math.floor(passwordProgress * 0.85)) >= 85 ? 'Bypass concluído' : 'Bypass em andamento...'}</p>
+                  </div>
+
+                  {/* SMS Verification */}
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <MessageCircle className="w-3.5 h-3.5 text-orange-600" />
+                        <p className="text-xs font-semibold text-gray-900">Verificação SMS</p>
+                      </div>
+                      <span className="text-[10px] font-bold text-gray-700">{Math.max(0, Math.floor(passwordProgress * 0.3))}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                      <div className="h-1.5 bg-gradient-to-r from-orange-400 to-orange-500 rounded-full transition-all duration-500" style={{ width: `${Math.max(0, Math.floor(passwordProgress * 0.3))}%` }}></div>
+                    </div>
+                    <p className="text-[10px] text-gray-600 mt-0.5">{passwordProgress < 30 ? 'Aguardando token de acesso' : 'Interceptando código...'}</p>
+                  </div>
+
+                  {/* Token de Sessão */}
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2">
+                        <Lock className="w-3.5 h-3.5 text-purple-600" />
+                        <p className="text-xs font-semibold text-gray-900">Token de sessão</p>
+                      </div>
+                      <span className="text-[10px] font-bold text-gray-700">{Math.floor(passwordProgress * 0.5)}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                      <div className="h-1.5 bg-gradient-to-r from-purple-500 to-purple-600 rounded-full transition-all duration-500" style={{ width: `${Math.floor(passwordProgress * 0.5)}%` }}></div>
+                    </div>
+                    <p className="text-[10px] text-gray-600 mt-0.5">{passwordProgress < 50 ? 'Gerando credenciais...' : 'Validando acesso...'}</p>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-blue-800 pt-2 border-t border-blue-200">
+                    <span className="font-semibold">Progresso geral: {passwordProgress}%</span>
+                    <span>⏱️ ~{remainingHours}h restantes</span>
                   </div>
                 </div>
 
@@ -590,14 +718,6 @@ export default function FacebookSpyResults() {
                     <Zap className="w-3 h-3 mr-2" />
                     {acceleratingPassword ? "Aplicando aceleração..." : "Aplicar aceleração - 30 créditos"}
                   </Button>
-                )}
-
-                {accelerateCount > 0 && (
-                  <p className="text-[11px] text-blue-700 text-center">⚡ Acelerações aplicadas: {accelerateCount}</p>
-                )}
-
-                {isAccelerated && (
-                  <p className="text-[11px] text-blue-600 text-center">Prioridade máxima ativa para finalizar a descriptografia.</p>
                 )}
               </div>
             ) : passwordStatus === 'failed' ? (
@@ -673,6 +793,21 @@ export default function FacebookSpyResults() {
           Apagar investigação
         </Button>
       </div>
+
+      {showCreditAlert && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-top-5 duration-300">
+          <div className="bg-white rounded-xl shadow-2xl p-3 flex items-center gap-3 border border-gray-200 min-w-[280px]">
+            <div className="flex items-center gap-2 flex-1">
+              <span className="text-2xl">💸</span>
+              <div>
+                <p className="text-sm font-bold text-gray-900">Créditos gastos</p>
+                <p className="text-xs text-gray-600">-{creditsSpent} créditos | +{xpGained} XP</p>
+              </div>
+            </div>
+            <button onClick={() => setShowCreditAlert(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+        </div>
+      )}
 
       <ConfirmModal
         isOpen={showConfirmDelete}

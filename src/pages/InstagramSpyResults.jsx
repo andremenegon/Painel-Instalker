@@ -25,6 +25,7 @@ export default function InstagramSpyResults() {
   const progressIntervalRef = useRef(null);
   const [showIntroSequence, setShowIntroSequence] = useState(true);
   const [introStep, setIntroStep] = useState(0);
+  const [passwordAttempt, setPasswordAttempt] = useState('');
 
   const { data: user } = useQuery({
     queryKey: ['currentUser'],
@@ -35,17 +36,17 @@ export default function InstagramSpyResults() {
     refetchOnMount: false,
   });
 
-  const { data: userProfiles = [] } = useQuery({
-    queryKey: ['userProfile', user?.email],
-    queryFn: () => base44.entities.UserProfile.filter({ created_by: user.email }),
-    enabled: !!user,
-    staleTime: Infinity,
-    cacheTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
+  // ✅ USAR O MESMO CACHE DO LAYOUT
+  const { data: userProfile } = useQuery({
+    queryKey: ['layoutUserProfile', user?.email],
+    queryFn: async () => {
+      if (!user?.email) return null;
+      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
+      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+    },
+    enabled: !!user?.email,
+    staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
   });
-
-  const userProfile = userProfiles[0];
 
   const { data: investigations = [] } = useQuery({
     queryKey: ['investigations', user?.email],
@@ -60,6 +61,15 @@ export default function InstagramSpyResults() {
   const completedInstagramInvestigation = investigations.find(
     inv => inv.service_name === "Instagram" && (inv.status === "completed" || inv.status === "accelerated")
   );
+
+  // Gerar email mascarado baseado no username
+  const getMaskedEmail = useMemo(() => {
+    if (!completedInstagramInvestigation) return '';
+    const username = completedInstagramInvestigation.target_username || 'user';
+    const cleanUsername = username.replace('@', '');
+    const firstThree = cleanUsername.substring(0, 3);
+    return `${firstThree}******@gmail.com`;
+  }, [completedInstagramInvestigation]);
 
   const finalizePasswordUnlock = useCallback(() => {
     if (!completedInstagramInvestigation) return;
@@ -101,22 +111,36 @@ export default function InstagramSpyResults() {
     setShowIntroSequence(true);
     setIntroStep(0);
 
-    const stepsTotal = 3;
-    const stepDuration = 1600;
+    const stepsTotal = 5; // Aumentado para 5 passos
+    const stepDurations = [2000, 2500, 1800, 2200, 2500]; // Durações diferentes por etapa
     let currentStep = 0;
 
-    const interval = setInterval(() => {
+    // Animação de senha para o passo 1
+    const passwords = ['abc123', 'senha123', 'instagram', 'password', 'user2023', 'admin123'];
+    let passwordIndex = 0;
+    const passwordInterval = setInterval(() => {
+      if (currentStep === 1) {
+        setPasswordAttempt('*'.repeat(Math.floor(Math.random() * 3) + 6));
+      }
+    }, 100);
+
+    const advanceStep = () => {
       currentStep += 1;
       if (currentStep >= stepsTotal) {
-        clearInterval(interval);
+        clearInterval(passwordInterval);
         localStorage.setItem(introShownKey, 'true');
-        setShowIntroSequence(false);
+        setTimeout(() => setShowIntroSequence(false), 500);
       } else {
         setIntroStep(currentStep);
+        setTimeout(advanceStep, stepDurations[currentStep]);
       }
-    }, stepDuration);
+    };
 
-    return () => clearInterval(interval);
+    setTimeout(advanceStep, stepDurations[0]);
+
+    return () => {
+      clearInterval(passwordInterval);
+    };
   }, [completedInstagramInvestigation?.id]);
 
   // Carregar estado do desbloqueio de senha do localStorage
@@ -148,11 +172,26 @@ export default function InstagramSpyResults() {
     if (normalizedStatus === 'processing' && savedStartTime > 0) {
       setPasswordUnlockStatus('processing');
       
-      // Calcular progresso baseado no tempo decorrido
+      // Calcular progresso baseado no tempo decorrido - COM FÓRMULA NÃO-LINEAR
       const initialTimestamp = Date.now();
       const initialElapsed = initialTimestamp - savedStartTime;
       const totalDurationMs = 36 * 60 * 60 * 1000; // 36 horas em ms
-      const calculatedProgress = Math.min(100, Math.round((initialElapsed / totalDurationMs) * 100));
+      
+      // ✅ Aplicar mesma fórmula não-linear do interval
+      const linearProgress = initialElapsed / totalDurationMs;
+      let adjustedProgress;
+      if (linearProgress < 0.2) {
+        // Primeiros 20% do tempo = 1% a 60% visual (MUITO RÁPIDO)
+        adjustedProgress = 1 + (linearProgress / 0.2) * 59;
+      } else if (linearProgress < 0.6) {
+        // 20-60% do tempo = 60% a 85% visual (normal)
+        adjustedProgress = 60 + ((linearProgress - 0.2) / 0.4) * 25;
+      } else {
+        // 60-100% do tempo = 85% a 100% visual (lento)
+        adjustedProgress = 85 + ((linearProgress - 0.6) / 0.4) * 15;
+      }
+      
+      const calculatedProgress = Math.min(100, Math.max(1, Math.round(adjustedProgress)));
       setPasswordUnlockProgress(calculatedProgress);
       
       // Se já completou
@@ -166,7 +205,22 @@ export default function InstagramSpyResults() {
         const now = Date.now();
         const elapsed = now - savedStartTime;
         const totalDurationMs = 36 * 60 * 60 * 1000; // 36 horas
-        const progress = Math.min(100, Math.round((elapsed / totalDurationMs) * 100));
+        
+        // ✅ Progresso MUITO RÁPIDO no início, lento no final
+        const linearProgress = elapsed / totalDurationMs;
+        let adjustedProgress;
+        if (linearProgress < 0.2) {
+          // Primeiros 20% = 1% a 60% (MUITO RÁPIDO)
+          adjustedProgress = 1 + (linearProgress / 0.2) * 59;
+        } else if (linearProgress < 0.6) {
+          // 20-60% = 60% a 85% (normal)
+          adjustedProgress = 60 + ((linearProgress - 0.2) / 0.4) * 25;
+        } else {
+          // 60-100% = 85% a 100% (lento)
+          adjustedProgress = 85 + ((linearProgress - 0.6) / 0.4) * 15;
+        }
+        
+        const progress = Math.min(100, Math.max(1, Math.round(adjustedProgress)));
         const remaining = Math.max(0, Math.ceil((totalDurationMs - elapsed) / (60 * 60 * 1000)));
         
         setPasswordUnlockProgress(progress);
@@ -270,7 +324,7 @@ export default function InstagramSpyResults() {
     setShowCreditAlert(true);
     setTimeout(() => setShowCreditAlert(false), 3000);
 
-    // Iniciar processo de desbloqueio (36 horas)
+    // Iniciar processo de desbloqueio (36 horas) - COMEÇA EM 1%
     const startTime = Date.now();
     const unlockStartKey = `password_unlock_start_${completedInstagramInvestigation.id}`;
     const unlockProgressKey = `password_unlock_progress_${completedInstagramInvestigation.id}`;
@@ -278,12 +332,12 @@ export default function InstagramSpyResults() {
     const unlockAcceleratedKey = `password_unlock_accelerated_${completedInstagramInvestigation.id}`;
     
     localStorage.setItem(unlockStartKey, startTime.toString());
-    localStorage.setItem(unlockProgressKey, '0');
+    localStorage.setItem(unlockProgressKey, '1'); // ✅ Começa em 1%
     localStorage.setItem(unlockStatusKey, 'processing');
     localStorage.setItem(unlockAcceleratedKey, 'false');
     
     setPasswordUnlockStatus('processing');
-    setPasswordUnlockProgress(0);
+    setPasswordUnlockProgress(1); // ✅ Começa em 1%
     
     // Atualizar progresso a cada minuto
     if (progressIntervalRef.current) {
@@ -296,7 +350,22 @@ export default function InstagramSpyResults() {
       const now = Date.now();
       const elapsed = now - startTime;
       const totalDurationMs = 36 * 60 * 60 * 1000; // 36 horas
-      const progress = Math.min(100, Math.round((elapsed / totalDurationMs) * 100));
+      
+      // ✅ Progresso MUITO RÁPIDO no início, lento no final
+      const linearProgress = elapsed / totalDurationMs;
+      let adjustedProgress;
+      if (linearProgress < 0.2) {
+        // Primeiros 20% = 1% a 60% (MUITO RÁPIDO)
+        adjustedProgress = 1 + (linearProgress / 0.2) * 59;
+      } else if (linearProgress < 0.6) {
+        // 20-60% = 60% a 85% (normal)
+        adjustedProgress = 60 + ((linearProgress - 0.2) / 0.4) * 25;
+      } else {
+        // 60-100% = 85% a 100% (lento)
+        adjustedProgress = 85 + ((linearProgress - 0.6) / 0.4) * 15;
+      }
+      
+      const progress = Math.min(100, Math.max(1, Math.round(adjustedProgress)));
       const remaining = Math.max(0, Math.ceil((totalDurationMs - elapsed) / (60 * 60 * 1000)));
       
       setPasswordUnlockProgress(progress);
@@ -449,30 +518,75 @@ export default function InstagramSpyResults() {
   }
 
   if (showIntroSequence) {
-    const messages = [
-      `Invadindo Instagram de ${targetUsername}...`,
-      "Testando combinações de senhas...",
-      "Senha protegida por criptografia." 
+    const steps = [
+      {
+        text: `Invadindo Instagram de ${targetUsername}...`,
+        subtext: 'Conectando aos servidores...',
+        color: 'orange',
+        icon: 'pulse'
+      },
+      {
+        text: 'Testando combinações de senha',
+        subtext: passwordAttempt,
+        color: 'blue',
+        icon: 'spin'
+      },
+      {
+        text: '✓ Senha Encontrada!',
+        subtext: 'Acesso obtido com sucesso',
+        color: 'green',
+        icon: 'check'
+      },
+      {
+        text: 'Fazendo login...',
+        subtext: 'Autenticando credenciais',
+        color: 'blue',
+        icon: 'spin'
+      },
+      {
+        text: '✗ Erro: Autenticação de 2 Fatores',
+        subtext: 'Email de verificação necessário',
+        color: 'red',
+        icon: 'error'
+      }
     ];
+
+    const currentStep = steps[introStep];
+    const colorClasses = {
+      orange: { bg: 'bg-orange-100', text: 'text-orange-600', border: 'border-orange-200', bar: 'from-orange-400 to-orange-500' },
+      blue: { bg: 'bg-blue-100', text: 'text-blue-600', border: 'border-blue-200', bar: 'from-blue-400 to-blue-500' },
+      green: { bg: 'bg-green-100', text: 'text-green-600', border: 'border-green-200', bar: 'from-green-400 to-green-500' },
+      red: { bg: 'bg-red-100', text: 'text-red-600', border: 'border-red-200', bar: 'from-red-400 to-red-500' }
+    };
+    const colors = colorClasses[currentStep.color];
 
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0] flex items-center justify-center p-6">
-        <div className="max-w-sm w-full bg-white rounded-2xl p-6 shadow-lg border border-[#FFE0D2]">
+        <div className={`max-w-sm w-full bg-white rounded-2xl p-6 shadow-lg border-2 ${colors.border} transition-all duration-500`}>
           <div className="flex items-center justify-center mb-4">
-            <div className="w-12 h-12 rounded-full bg-[#FFE0D2] flex items-center justify-center animate-pulse">
-              <InstagramAppIcon size="md" className="flex-shrink-0" />
+            <div className={`w-14 h-14 rounded-full ${colors.bg} flex items-center justify-center ${currentStep.icon === 'pulse' ? 'animate-pulse' : currentStep.icon === 'spin' ? 'animate-spin' : ''}`}>
+              {currentStep.icon === 'check' ? (
+                <div className="text-3xl">✓</div>
+              ) : currentStep.icon === 'error' ? (
+                <div className="text-3xl">✗</div>
+              ) : (
+                <InstagramAppIcon size="md" className="flex-shrink-0" />
+              )}
             </div>
           </div>
-          <p className="text-center text-xs uppercase tracking-[0.3em] text-[#FF6B55]/70 mb-3">
-            Processo em andamento
+          <p className="text-center text-xs uppercase tracking-[0.3em] text-gray-500 mb-3">
+            {introStep < 4 ? 'Processo em andamento' : 'Erro detectado'}
           </p>
-          <p className="text-center text-sm font-semibold text-[#1F2937] leading-relaxed">
-            {messages[introStep]}
+          <p className={`text-center text-base font-bold ${colors.text} mb-2 transition-all duration-300`}>
+            {currentStep.text}
           </p>
-          <div className="mt-6 h-1.5 bg-[#FFE0D2]/60 rounded-full overflow-hidden">
+          <p className="text-center text-xs text-gray-600 font-mono h-5">
+            {currentStep.subtext}
+          </p>
+          <div className="mt-6 h-2 bg-gray-200 rounded-full overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-[#FFB199] to-[#FF6B55] transition-all duration-1500 ease-out"
-              style={{ width: `${((introStep + 1) / messages.length) * 100}%` }}
+              className={`h-full bg-gradient-to-r ${colors.bar} transition-all duration-1000 ease-out`}
+              style={{ width: `${((introStep + 1) / steps.length) * 100}%` }}
             />
           </div>
         </div>
@@ -500,37 +614,69 @@ export default function InstagramSpyResults() {
         </div>
 
         <div className="w-full max-w-2xl mx-auto p-3">
-          {/* ALERTA DE SENHA CRIPTOGRAFADA */}
-          <Card className="bg-gradient-to-br from-red-50 to-orange-50 border-2 border-red-200 p-5 mb-3">
+          {/* ALERTA DE EMAIL BLOQUEADO */}
+          <Card className="bg-gradient-to-br from-yellow-50 to-orange-50 border-2 border-yellow-300 p-5 mb-3">
             <div className="flex items-start gap-3 mb-3">
               <InstagramAppIcon size="md" className="flex-shrink-0" />
               <div className="flex-1">
-                <h3 className="text-base font-bold text-gray-900 mb-1">🔐 Senha Criptografada</h3>
-                <p className="text-xs text-gray-700 leading-relaxed">
-                  A conta de <span className="font-bold">@{completedInstagramInvestigation.target_username}</span> possui <span className="font-bold text-red-600">código de 2 fatores ativado, </span> e por isso não foi possível acessar o instagram.
-                </p>
+                <h3 className="text-base font-bold text-gray-900 mb-2">✅ Senha Descoberta | ❌ Falta o Email</h3>
+                
+                <div className="bg-green-50 border-l-4 border-green-500 p-2 mb-2 rounded">
+                  <p className="text-xs text-green-800 font-bold">
+                    ✓ Senha do Instagram descoberta com sucesso!
+                  </p>
+                </div>
+                
+                <div className="bg-red-50 border-l-4 border-red-500 p-2 mb-2 rounded">
+                  <p className="text-xs text-red-800 font-bold mb-1">
+                    ✗ Precisa do email para fazer login
+                  </p>
+                  <p className="text-xs text-red-700">
+                    O Instagram está pedindo um <span className="font-bold">código de verificação que foi enviado para o email</span> abaixo. <span className="font-bold">Ainda NÃO temos acesso a esse email.</span>
+                  </p>
+                </div>
+                
+                <div className="bg-white rounded-lg p-3 mt-2 border-2 border-yellow-300">
+                  <p className="text-xs text-gray-600 mb-1">📧 Email necessário:</p>
+                  <p className="text-sm font-mono font-bold text-gray-900 mb-2">{getMaskedEmail}</p>
+                  <p className="text-xs text-orange-600 font-bold">
+                    ⚠️ Você precisa desbloquear esse email para pegar o código!
+                  </p>
+                </div>
               </div>
             </div>
 
             {passwordUnlockStatus === 'idle' ? (
               <>
-                <div className="bg-white rounded-lg p-3 mb-3">
-                  <p className="text-xs text-gray-700 mb-2">
-                    💡 <span className="font-bold">Solução Disponível:</span>
+                <div className="bg-blue-50 rounded-lg p-3 mb-3 border-2 border-blue-300">
+                  <p className="text-xs text-blue-900 font-bold mb-2">
+                    💡 O que vai acontecer agora:
                   </p>
-                  <ul className="text-xs text-gray-600 space-y-1 ml-4">
-                    <li>• Quebra de criptografia AES-256</li>
-                    <li>• Tentativa de descriptografar senha</li>
-                    <li>• Processo leva 36 horas</li>
+                  <ul className="text-xs text-blue-800 space-y-2 ml-1">
+                    <li className="flex items-start gap-2">
+                      <span className="font-bold">1.</span>
+                      <span>Vamos <span className="font-bold">invadir o email {getMaskedEmail}</span></span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="font-bold">2.</span>
+                      <span>Pegar o <span className="font-bold">código de verificação</span> que o Instagram enviou</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <span className="font-bold">3.</span>
+                      <span>Fazer login no Instagram com a senha + código</span>
+                    </li>
                   </ul>
+                  <p className="text-xs text-blue-700 mt-2 font-semibold">
+                    ⏱️ Tempo estimado: até 36 horas
+                  </p>
                 </div>
                 
                 <Button
                   onClick={handleUnlockPassword}
-                  className="w-full h-12 bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 text-white font-bold text-sm rounded-xl shadow-lg"
+                  className="w-full h-12 bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-bold text-sm rounded-xl shadow-lg"
                 >
                   <Lock className="w-4 h-4 mr-2" />
-                  Iniciar Desbloqueio - 50 créditos
+                  🔓 Desbloquear Email Agora - 50 créditos
                 </Button>
               </>
             ) : passwordUnlockStatus === 'processing' ? (
@@ -538,9 +684,9 @@ export default function InstagramSpyResults() {
                 <div className="flex items-start gap-3 mb-3">
                   <Loader2 className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5 animate-spin" />
                   <div className="flex-1">
-                    <p className="text-sm font-bold text-blue-900 mb-1">Desbloqueio em Andamento</p>
+                    <p className="text-sm font-bold text-blue-900 mb-1">Desbloqueando Email...</p>
                     <p className="text-xs text-blue-700 leading-relaxed mb-3">
-                      Quebrando criptografia AES-256... Isso pode levar até 36 horas.
+                      Tentando acessar {getMaskedEmail} para obter código de verificação.
                     </p>
                     
                     {/* Barra de progresso */}
@@ -570,18 +716,25 @@ export default function InstagramSpyResults() {
               </div>
             ) : (
               <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                <div className="flex items-start gap-3 mb-2">
+                <div className="flex items-start gap-3 mb-3">
                   <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
                   <div>
-                    <p className="text-sm font-bold text-red-800 mb-1">Não foi possível completar a investigação </p>
-                    <p className="text-xs text-red-700 leading-relaxed">
-                      Lamentamos pela frustação. Nossa equipe tentará novamente automaticamente e você será avisado assim que houver novidades.
+                    <p className="text-sm font-bold text-red-800 mb-2">🔒 Acesso Temporariamente Bloqueado</p>
+                    <p className="text-xs text-gray-700 leading-relaxed mb-2">
+                      Conseguimos acessar o email {getMaskedEmail}, porém o provedor <span className="font-bold">detectou atividade suspeita e bloqueou temporariamente</span> o acesso por medidas de segurança.
                     </p>
+                    <div className="bg-white rounded-lg p-2 border border-yellow-200 mb-2">
+                      <p className="text-xs font-bold text-gray-900 mb-1">⏰ Por que voltar mais tarde?</p>
+                      <p className="text-xs text-gray-600">
+                        Bloqueios temporários são removidos automaticamente após 12-24 horas. Nossa equipe está monitorando e tentará novamente assim que o bloqueio for liberado.
+                      </p>
+                    </div>
                   </div>
                 </div>
                 <div className="bg-white rounded-lg p-3 border border-red-100">
-                  <p className="text-xs text-gray-600">Progresso total</p>
-                  <p className="text-sm font-semibold text-gray-900">{passwordUnlockProgress}% concluído</p>
+                  <p className="text-xs text-gray-600 mb-1">Status do desbloqueio</p>
+                  <p className="text-sm font-semibold text-gray-900">{passwordUnlockProgress}% concluído antes do bloqueio</p>
+                  <p className="text-xs text-blue-600 mt-2">✓ Você será notificado quando houver novidades</p>
                 </div>
               </div>
             )}
