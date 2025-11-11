@@ -3,7 +3,6 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { supabase } from "@/lib/supabaseClient";
-import { mangofyClient } from "@/api/mangofyClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -150,7 +149,15 @@ export default function BuyCredits() {
 
     const checkInterval = setInterval(async () => {
       try {
-        const charge = await mangofyClient.getCharge(pixData.chargeId);
+        // Verificar status via API Serverless (resolve CORS)
+        const response = await fetch(`/api/check-payment?chargeId=${pixData.chargeId}`);
+        
+        if (!response.ok) {
+          console.error('Erro ao verificar pagamento');
+          return;
+        }
+        
+        const charge = await response.json();
         
         if (charge.status === 'paid') {
           // Pagamento confirmado!
@@ -207,22 +214,29 @@ export default function BuyCredits() {
     setCurrentPackage(pkg);
 
     try {
-      // Criar cobrança PIX via Mangofy
+      // Criar cobrança PIX via API Serverless (resolve CORS)
       const totalCredits = pkg.credits + (pkg.bonus || 0);
       const amountInCents = Math.round(pkg.price * 100);
 
-      const charge = await mangofyClient.createPixCharge({
-        amount: amountInCents,
-        description: `${totalCredits} créditos In'Stalker`,
-        customer_id: user.email,
-        customer_email: user.email,
-        customer_name: user.name || user.email,
-        credits: totalCredits,
-        metadata: {
-          package_id: pkg.id,
-          bonus: pkg.bonus || 0,
+      const response = await fetch('/api/create-pix', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          amount: amountInCents,
+          description: `${totalCredits} créditos In'Stalker`,
+          customerName: user.user_metadata?.full_name || user.email,
+          customerEmail: user.email,
+        }),
       });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Erro ao criar cobrança');
+      }
+
+      const charge = await response.json();
 
       // Salvar transação como pendente no Supabase
       await supabase

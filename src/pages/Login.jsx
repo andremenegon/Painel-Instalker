@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
+import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,7 +64,12 @@ export default function Login() {
     setLoading(true);
     
     try {
-      const user = await base44.auth.login(formData.email, formData.password);
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email: formData.email,
+        password: formData.password
+      });
+      
+      if (loginError) throw loginError;
       
       // Limpar cache do usuário anterior e forçar refetch
       queryClient.removeQueries({ queryKey: ['currentUser'] });
@@ -75,12 +80,8 @@ export default function Login() {
       // Aguardar um pouco para garantir que o logout foi processado
       await new Promise(resolve => setTimeout(resolve, 1000));
       
-      // Redirecionar admin para página admin
-      if (user.role === 'admin') {
-        navigate(createPageUrl("Admin"));
-      } else {
-        navigate(createPageUrl("Dashboard"));
-      }
+      // Redirecionar para dashboard (não temos mais role de admin no Supabase)
+      navigate(createPageUrl("Dashboard"));
 
       setLastEmail(formData.email);
     } catch (error) {

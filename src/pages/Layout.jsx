@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { LogOut, Zap, Plus, User, Target, Lock, ArrowLeft } from "lucide-react";
-import { base44 } from "@/api/base44Client";
+import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import Logo from "@/components/dashboard/Logo";
 import logoFull from "@/assets/branding/instalker-logo-full.png";
@@ -22,10 +22,27 @@ export default function Layout({ children, currentPageName }) {
   const [showLGPD, setShowLGPD] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
+  // Calcular showHeader ANTES dos useEffects
+  const showHeader = currentPageName !== "Login" && currentPageName !== "Register";
+  const showFooter = currentPageName === "Dashboard";
+  const isInvestigationPage = showHeader && currentPageName !== "SMSSpyChat" && ((currentPageName || "").toLowerCase().includes("spy") || (currentPageName || "").toLowerCase().includes("investigation"));
+
   // ✅ APENAS BUSCAR USER - SEM QUERIES PESADAS
   useEffect(() => {
-    base44.auth.me().then(setUser).catch(() => {});
-  }, []);
+    const checkAuth = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user && showHeader) {
+        // Sem usuário autenticado, redirecionar para login
+        navigate(createPageUrl("Login"));
+        return;
+      }
+      
+      setUser(user);
+    };
+    
+    checkAuth();
+  }, [showHeader, navigate]);
 
   useEffect(() => {
     setIsMenuOpen(false);
@@ -45,21 +62,29 @@ export default function Layout({ children, currentPageName }) {
     // ✅ LIMPAR TODO O CACHE ANTES DE DESLOGAR
     queryClient.clear(); // Limpa TUDO
     
-    await base44.auth.logout();
+    await supabase.auth.signOut();
+    setUser(null);
     setIsMenuOpen(false);
     navigate(createPageUrl("Login"));
   };
-
-  const showHeader = currentPageName !== "Login" && currentPageName !== "Register";
-  const showFooter = currentPageName === "Dashboard";
-  const isInvestigationPage = showHeader && currentPageName !== "SMSSpyChat" && ((currentPageName || "").toLowerCase().includes("spy") || (currentPageName || "").toLowerCase().includes("investigation"));
 
   const { data: layoutUserProfile, refetch: refetchLayoutProfile } = useQuery({
     queryKey: ["layoutUserProfile", user?.email],
     queryFn: async () => {
       if (!user?.email) return null;
-      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
-      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+      
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('email', user.email)
+        .single();
+      
+      if (error) {
+        console.error('Erro ao buscar perfil:', error);
+        return null;
+      }
+      
+      return data;
     },
     enabled: showHeader && !!user?.email,
     staleTime: 0, // ✅ SEMPRE considerar dados como stale

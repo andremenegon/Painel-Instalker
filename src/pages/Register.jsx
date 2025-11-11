@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
+import { supabase } from "@/lib/supabaseClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -54,14 +54,37 @@ export default function Register() {
     setLoading(true);
     
     try {
-      // Registrar usuário
-      if (formData.email && formData.full_name && formData.password) {
-        await base44.auth.register({
+      // Registrar usuário no Supabase Auth
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: formData.email,
+        password: formData.password,
+        options: {
+          data: {
+            full_name: formData.full_name
+          }
+        }
+      });
+      
+      if (authError) throw authError;
+      
+      // Criar perfil do usuário na tabela user_profiles
+      const { error: profileError } = await supabase
+        .from('user_profiles')
+        .insert([{
           email: formData.email,
-          full_name: formData.full_name,
-          password: formData.password
-        });
+          name: formData.full_name,
+          credits: 0,
+          created_at: new Date().toISOString()
+        }]);
+      
+      if (profileError) {
+        console.error("Erro ao criar perfil:", profileError);
+        // Se o perfil já existe, apenas continua
+        if (!profileError.message?.includes('duplicate')) {
+          throw profileError;
+        }
       }
+      
       await new Promise(resolve => setTimeout(resolve, 1500));
       setLastEmail(formData.email);
       navigate(createPageUrl("Dashboard"));
@@ -69,7 +92,7 @@ export default function Register() {
       console.error("Erro ao registrar:", error);
       
       // Se o email já existe, redirecionar para login com os dados preenchidos
-      if (error.message && error.message.includes('já cadastrado')) {
+      if (error.message && (error.message.includes('já cadastrado') || error.message.includes('already registered'))) {
         // Salvar email e senha para preencher no login
         setLastEmail(formData.email);
         localStorage.setItem('pending_login_password', formData.password);
@@ -97,31 +120,32 @@ export default function Register() {
     
     try {
       // Buscar no banco se o email já existe
-      const users = await base44.entities.User.filter({ email });
+      const { data: profiles, error } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('email', email);
       
-        if (users && users.length > 0) {
-          const user = users[0];
-          
-          // Email já existe - mostrar toast e redirecionar
-          setToastMessage("Você já é um usuário In'Stalker!");
-          setShowToast(true);
-          setLastEmail(email);
-          
-          // Salvar senha para preencher no login
-          localStorage.setItem('temp_login_password', user.password || '');
+      if (error) throw error;
+      
+      if (profiles && profiles.length > 0) {
+        const profile = profiles[0];
         
-          // Redirecionar após 2.5 segundos
-          setTimeout(() => {
-            navigate(createPageUrl("Login"), {
-              state: {
-                email: email,
-                password: user.password || '',
-                userName: user.full_name || 'usuário',
-                fromRegister: true,
-                showToast: true
-              }
-            });
-          }, 2500);
+        // Email já existe - mostrar toast e redirecionar
+        setToastMessage("Você já é um usuário In'Stalker!");
+        setShowToast(true);
+        setLastEmail(email);
+        
+        // Redirecionar após 2.5 segundos
+        setTimeout(() => {
+          navigate(createPageUrl("Login"), {
+            state: {
+              email: email,
+              userName: profile.name || 'usuário',
+              fromRegister: true,
+              showToast: true
+            }
+          });
+        }, 2500);
       }
     } catch (error) {
       // Ignorar erros de verificação
