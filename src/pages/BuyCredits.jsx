@@ -2,13 +2,15 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
+import { supabase } from "@/lib/supabaseClient";
+import { mangofyClient } from "@/api/mangofyClient";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ArrowLeft, Zap, Sparkles, Check, TrendingUp } from "lucide-react";
 import ConfirmModal from "../components/dashboard/ConfirmModal";
 import Toast from "../components/effects/Toast";
+import PixPaymentModal from "../components/payment/PixPaymentModal";
 
 export default function BuyCredits() {
   const navigate = useNavigate();
@@ -20,6 +22,12 @@ export default function BuyCredits() {
   // ✅ Estados para efeitos
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+
+  // ✅ Estados para PIX
+  const [showPixModal, setShowPixModal] = useState(false);
+  const [pixData, setPixData] = useState(null);
+  const [currentPackage, setCurrentPackage] = useState(null);
+  const [checkingPayment, setCheckingPayment] = useState(false);
 
   // ✅ FUNÇÃO DE SOM UNIVERSAL
   const playSound = (type) => {
@@ -69,7 +77,10 @@ export default function BuyCredits() {
 
   const { data: user } = useQuery({
     queryKey: ['currentUser'],
-    queryFn: () => base44.auth.me(),
+    queryFn: async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      return user;
+    },
     staleTime: Infinity,
     cacheTime: Infinity,
     refetchOnWindowFocus: false,
@@ -81,8 +92,14 @@ export default function BuyCredits() {
     queryKey: ['layoutUserProfile', user?.email],
     queryFn: async () => {
       if (!user?.email) return null;
-      const profiles = await base44.entities.UserProfile.filter({ created_by: user.email });
-      return Array.isArray(profiles) && profiles.length > 0 ? profiles[0] : null;
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('*')
+        .eq('email', user.email)
+        .single();
+      
+      if (error) throw error;
+      return data;
     },
     enabled: !!user?.email,
     staleTime: 60 * 1000, // ✅ 60 segundos (igual ao Layout)
@@ -127,40 +144,137 @@ export default function BuyCredits() {
     playSound('coins');
   };
 
+  // Polling para verificar status do pagamento
+  useEffect(() => {
+    if (!checkingPayment || !pixData?.chargeId) return;
+
+    const checkInterval = setInterval(async () => {
+      try {
+        const charge = await mangofyClient.getCharge(pixData.chargeId);
+        
+        if (charge.status === 'paid') {
+          // Pagamento confirmado!
+          clearInterval(checkInterval);
+          setCheckingPayment(false);
+          setShowPixModal(false);
+          
+          // Adicionar créditos
+          const totalCredits = currentPackage.credits + (currentPackage.bonus || 0);
+          
+          playPurchaseSound();
+          
+          // Atualizar créditos no Supabase
+          await supabase
+            .from('user_profiles')
+            .update({ credits: userProfile.credits + totalCredits })
+            .eq('email', user.email);
+
+          // Atualizar transação para completed
+          await supabase
+            .from('payment_transactions')
+            .update({
+              status: 'completed',
+              paid_at: new Date().toISOString(),
+            })
+            .eq('charge_id', pixData.chargeId);
+
+          // ✅ INVALIDAR O CACHE E FORÇAR ATUALIZAÇÃO
+          await queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
+          await queryClient.refetchQueries({ queryKey: ['layoutUserProfile', user?.email] });
+
+          setPurchaseDetails({
+            credits: totalCredits,
+            message: `✅ Pagamento confirmado!\n\n+${totalCredits} créditos adicionados à sua conta`
+          });
+          setShowSuccessModal(true);
+        } else if (charge.status === 'expired' || charge.status === 'cancelled') {
+          clearInterval(checkInterval);
+          setCheckingPayment(false);
+          setShowPixModal(false);
+          alert('Pagamento expirado ou cancelado. Tente novamente.');
+        }
+      } catch (error) {
+        console.error('Erro ao verificar pagamento:', error);
+      }
+    }, 3000); // Verificar a cada 3 segundos
+
+    return () => clearInterval(checkInterval);
+  }, [checkingPayment, pixData, currentPackage, userProfile, user, queryClient]);
+
   const handleBuy = async (pkg) => {
     playSound('click');
     setLoading(pkg.id);
+    setCurrentPackage(pkg);
 
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
-    if (userProfile) {
+    try {
+      // Criar cobrança PIX via Mangofy
       const totalCredits = pkg.credits + (pkg.bonus || 0);
+      const amountInCents = Math.round(pkg.price * 100);
 
-      playPurchaseSound();
-
-      await base44.entities.UserProfile.update(userProfile.id, {
-        credits: userProfile.credits + totalCredits
-      });
-
-      // ✅ INVALIDAR O CACHE CORRETO DO LAYOUT E FORÇAR ATUALIZAÇÃO IMEDIATA
-      await queryClient.invalidateQueries({ queryKey: ['layoutUserProfile', user?.email] });
-      await queryClient.invalidateQueries({ queryKey: ['userProfile'] });
-      
-      // ✅ FORÇAR REFETCH IMEDIATO
-      await queryClient.refetchQueries({ queryKey: ['layoutUserProfile', user?.email] });
-
-      setPurchaseDetails({
+      const charge = await mangofyClient.createPixCharge({
+        amount: amountInCents,
+        description: `${totalCredits} créditos In'Stalker`,
+        customer_id: user.email,
+        customer_email: user.email,
+        customer_name: user.name || user.email,
         credits: totalCredits,
-        message: `✅ Compra confirmada!\n\n+${totalCredits} créditos adicionados à sua conta`
+        metadata: {
+          package_id: pkg.id,
+          bonus: pkg.bonus || 0,
+        },
       });
-      setShowSuccessModal(true);
+
+      // Salvar transação como pendente no Supabase
+      await supabase
+        .from('payment_transactions')
+        .insert({
+          user_email: user.email,
+          charge_id: charge.id,
+          package_id: pkg.id,
+          credits: totalCredits,
+          amount: amountInCents,
+          status: 'pending',
+          payment_method: 'pix',
+        });
+
+      // Exibir modal com QR Code
+      setPixData({
+        chargeId: charge.id,
+        pixCode: charge.pix.qrcode,
+        qrCode: charge.pix.qrcode_url,
+        amount: amountInCents,
+        credits: totalCredits,
+        expiresAt: charge.expires_at,
+      });
+      
+      setShowPixModal(true);
+      setCheckingPayment(true);
+    } catch (error) {
+      console.error('Erro ao criar cobrança:', error);
+      alert('Erro ao gerar PIX. Tente novamente.');
+    } finally {
+      setLoading("");
     }
-    setLoading(""); // Ensure loading state is always cleared
   };
 
   return (
     <>
       <Toast show={showToast} message={toastMessage} type="credits" onComplete={() => setShowToast(false)} />
+      
+      {/* Modal de Pagamento PIX */}
+      {pixData && (
+        <PixPaymentModal
+          isOpen={showPixModal}
+          onClose={() => {
+            setShowPixModal(false);
+            setCheckingPayment(false);
+          }}
+          pixData={pixData}
+          onPaymentConfirmed={() => {
+            // Já tratado no useEffect de polling
+          }}
+        />
+      )}
 
       <div className="min-h-screen bg-gradient-to-br from-[#FFF8F3] via-[#FFF5ED] to-[#FFEEE0]">
         <div className="fixed inset-0 overflow-hidden pointer-events-none">
